@@ -23,9 +23,11 @@ def build_model(floor_paths, cfg, out_dir):
     for i, plan in enumerate(plans):
         base_z = i * cfg.floor_height_mm
         boxes.extend(plan_to_boxes(plan, mm_per_px, cfg, base_z))
-        walls_mm = [rect_px_to_mm(w, mm_per_px, plan.image_size[1])
-                    for w in plan.walls]
-        fp_poly = footprint_polygon(walls_mm)
+        # 壁は開口で途切れるため、柱・開口も含めてフットプリントを閉じる
+        solid_rects = plan.walls + plan.columns + plan.windows + plan.doors
+        rects_mm = [rect_px_to_mm(r, mm_per_px, plan.image_size[1])
+                    for r in solid_rects]
+        fp_poly = footprint_polygon(rects_mm)
         slabs.append((fp_poly, base_z - cfg.slab_thickness_mm, base_z))
         if i == len(plans) - 1:  # 最上階の天井スラブ
             top = base_z + cfg.floor_height_mm

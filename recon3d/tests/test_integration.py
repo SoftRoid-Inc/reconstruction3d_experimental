@@ -27,6 +27,31 @@ def test_build_28_11177(tmp_path):
     assert ext[1] == pytest.approx(924.9 * s, rel=0.01)
     # 高さ: 2階分5800 + 床スラブ150 + 天井スラブ150
     assert ext[2] == pytest.approx(6100.0, abs=1.0)
+    # 1F床スラブが建物全幅を覆う(壁が開口で途切れてもフットプリントが閉じる)
+    slab0 = scene.geometry["slab_0"]
+    slab_ext = slab0.bounds[1] - slab0.bounds[0]
+    assert slab_ext[0] == pytest.approx(773.0 * s, rel=0.01)
+    assert slab_ext[1] == pytest.approx(924.9 * s, rel=0.01)
     assert os.path.exists(os.path.join(str(tmp_path), "report.json"))
     with open(os.path.join(str(tmp_path), "report.json")) as f:
         assert json.load(f)["mm_per_px"] == report["mm_per_px"]
+
+
+from recon3d.calibrate import scale_mm_per_px
+from recon3d.geometry import plan_to_boxes
+from recon3d.loader import load_floor
+from recon3d.verify import reprojection_iou, save_overlay
+
+
+def test_reprojection_matches_gt(tmp_path):
+    cfg = ReconConfig()
+    plan_1f = load_floor(GT_DIR + "/1F.json", "1F")
+    s = scale_mm_per_px(plan_1f, cfg.known_width_mm)
+    for name in ("1F", "2F"):
+        plan = load_floor(f"{GT_DIR}/{name}.json", name)
+        boxes = plan_to_boxes(plan, s, cfg, base_z=0.0)
+        iou = reprojection_iou(plan, boxes, s)
+        assert iou > 0.99, f"{name}: IoU={iou}"
+        png = str(tmp_path / f"{name}.png")
+        save_overlay(plan, boxes, s, png)
+        assert os.path.getsize(png) > 0

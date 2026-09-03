@@ -17,6 +17,18 @@ def test_footprint_union_of_rects():
     assert len(poly.interiors) == 0
 
 
+def test_footprint_closes_wall_gaps_with_openings():
+    # 下辺の壁が窓位置で途切れている → 窓矩形を含めると外周が閉じる
+    walls = [Rect(0, 0, 400, 100), Rect(600, 0, 1000, 100),   # 途切れた下辺
+             Rect(0, 900, 1000, 1000),
+             Rect(0, 0, 100, 1000), Rect(900, 0, 1000, 1000)]
+    window = Rect(400, 0, 600, 100)
+    # 壁だけでは断片の最大要素になってしまう(=バグの再現条件)
+    assert footprint_polygon(walls).area < 1000 * 1000 * 0.5
+    poly = footprint_polygon(walls + [window])
+    assert poly.area == pytest.approx(1000 * 1000)
+
+
 def test_slab_mesh_extrudes():
     walls = [Rect(0, 0, 1000, 100), Rect(0, 900, 1000, 1000),
              Rect(0, 0, 100, 1000), Rect(900, 0, 1000, 1000)]

@@ -16,8 +16,10 @@ COLORS = {
 }
 
 
-def footprint_polygon(walls_mm):
-    union = unary_union([shapely_box(r.x1, r.y1, r.x2, r.y2) for r in walls_mm])
+def footprint_polygon(rects_mm):
+    """外周フットプリント。壁は開口位置で途切れるため、壁だけでなく
+    開口・柱の矩形も含めて渡すこと(開口が隙間を閉じて外周ループが成立する)。"""
+    union = unary_union([shapely_box(r.x1, r.y1, r.x2, r.y2) for r in rects_mm])
     if union.geom_type == "MultiPolygon":
         union = max(union.geoms, key=lambda g: g.area)
     return Polygon(union.exterior)  # 中庭等の穴は埋める
