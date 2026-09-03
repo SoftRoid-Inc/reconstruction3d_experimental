@@ -1,10 +1,8 @@
-import warnings
-
 import pytest
 
 from recon3d.config import ReconConfig
 from recon3d.geometry import (
-    Box3D, assign_openings, plan_to_boxes, rect_px_to_mm,
+    Box3D, assign_openings, opening_to_boxes, plan_to_boxes, rect_px_to_mm,
     subtract_openings_1d, wall_to_boxes,
 )
 from recon3d.loader import FloorPlan, Rect
@@ -30,16 +28,39 @@ def test_subtract_openings_1d():
     assert subtract_openings_1d(0, 100, [(-5, 105)]) == []
 
 
-def test_assign_openings_picks_max_overlap():
+def test_assign_openings_split_by_overlap():
     walls = [Rect(0, 0, 100, 10), Rect(0, 20, 100, 30)]
-    openings = [Rect(40, 19, 60, 31),      # 壁1と大きく交差
-                Rect(10, -1, 20, 11),      # 壁0
-                Rect(300, 300, 310, 310)]  # どの壁とも交差しない
-    with warnings.catch_warnings(record=True) as rec:
-        warnings.simplefilter("always")
-        m = assign_openings(walls, openings)
-        assert any("交差しない" in str(w.message) for w in rec)
-    assert m == {0: [openings[1]], 1: [openings[0]]}
+    openings = [Rect(40, 19, 60, 31),      # 壁1と83%重なり → 引き算
+                Rect(10, -1, 20, 11),      # 壁0と83%重なり → 引き算
+                Rect(300, 300, 310, 310),  # 重なりなし → 充填
+                Rect(0, 8, 30, 20)]        # 壁0と17%重なり → 充填
+    assigned, free = assign_openings(walls, openings)
+    assert assigned == {0: [openings[1]], 1: [openings[0]]}
+    assert free == [openings[2], openings[3]]
+
+
+def test_opening_to_boxes_window_infill():
+    # 壁の隙間の窓(横向き): 腰壁+垂れ壁(wall_infill) + pane
+    boxes = opening_to_boxes(Rect(1000, 0, 2000, 150), "window", CFG, base_z=0.0)
+    infill = [b for b in boxes if b.category == "wall_infill"]
+    panes = [b for b in boxes if b.category == "pane_window"]
+    assert len(infill) == 2 and len(panes) == 1
+    zs = sorted((b.z1, b.z2) for b in infill)
+    assert zs == [(0.0, 900.0), (2000.0, 2900.0)]
+    assert all(b.x1 == 1000.0 and b.x2 == 2000.0 for b in infill)
+    assert (panes[0].z1, panes[0].z2) == (900.0, 2000.0)
+    assert panes[0].y2 - panes[0].y1 == pytest.approx(CFG.pane_thickness_mm)
+
+
+def test_opening_to_boxes_door_infill_vertical():
+    # 縦向きドア: 垂れ壁のみ + pane
+    boxes = opening_to_boxes(Rect(0, 500, 150, 1400), "door", CFG, base_z=0.0)
+    infill = [b for b in boxes if b.category == "wall_infill"]
+    panes = [b for b in boxes if b.category == "pane_door"]
+    assert len(infill) == 1 and len(panes) == 1
+    assert (infill[0].z1, infill[0].z2) == (2000.0, 2900.0)
+    assert (infill[0].y1, infill[0].y2) == (500.0, 1400.0)
+    assert panes[0].x2 - panes[0].x1 == pytest.approx(CFG.pane_thickness_mm)
 
 
 def test_wall_solid_no_opening():

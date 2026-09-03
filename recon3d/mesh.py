@@ -8,6 +8,7 @@ from shapely.ops import unary_union
 
 COLORS = {
     "wall": (205, 205, 210, 255),
+    "wall_infill": (205, 205, 210, 255),
     "column": (150, 120, 90, 255),
     "pane_window": (140, 200, 255, 120),
     "pane_door": (170, 130, 80, 200),

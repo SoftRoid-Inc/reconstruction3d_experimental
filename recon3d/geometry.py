@@ -1,6 +1,11 @@
 """軸平行ボックス分割による形状生成。全入力が軸平行矩形なので、開口の引き算は
-長手方向の1次元区間分割+z方向の腰壁/垂れ壁生成で完結する(ブーリアン不要)。"""
-import warnings
+長手方向の1次元区間分割+z方向の腰壁/垂れ壁生成で完結する(ブーリアン不要)。
+
+開口の扱いは2通り:
+- GT(28-AAAAA実測): 壁は開口位置で途切れており、開口矩形は壁の「隙間」を埋める
+  → 開口矩形そのものに腰壁/垂れ壁(wall_infill)と建具(pane)を充填する
+- prediction.json系: 開口が壁に重畳し得る → 重なりが大きい場合は壁から引き算する
+重なり率(開口面積比)OVERLAP_SUBTRACT以上で引き算方式、未満で充填方式に振り分ける。"""
 from dataclasses import dataclass
 
 from recon3d.loader import Rect
@@ -30,16 +35,23 @@ def _overlap_area(a, b):
     return w * h if (w > 0 and h > 0) else 0.0
 
 
+OVERLAP_SUBTRACT = 0.5
+
+
 def assign_openings(walls, openings):
+    """開口を (壁から引き算する分, 隙間充填する分) に振り分ける。
+    返り値: (assigned: {wall_index: [rect,...]}, freestanding: [rect,...])"""
     assigned = {}
+    freestanding = []
     for o in openings:
+        area = o.w * o.h
         areas = [_overlap_area(w, o) for w in walls]
         best = max(range(len(walls)), key=lambda i: areas[i]) if walls else None
-        if best is None or areas[best] <= 0:
-            warnings.warn(f"開口 {o} はどの壁とも交差しないため無視する")
-            continue
-        assigned.setdefault(best, []).append(o)
-    return assigned
+        if best is not None and area > 0 and areas[best] / area >= OVERLAP_SUBTRACT:
+            assigned.setdefault(best, []).append(o)
+        else:
+            freestanding.append(o)
+    return assigned, freestanding
 
 
 def subtract_openings_1d(start, end, holes):
@@ -101,17 +113,43 @@ def wall_to_boxes(wall_mm, openings_mm, cfg, base_z):
     return boxes
 
 
+def opening_to_boxes(rect_mm, kind, cfg, base_z):
+    """壁の隙間に置かれた開口矩形を、腰壁/垂れ壁(wall_infill)+建具(pane)で充填する。"""
+    horizontal = not rect_mm.is_vertical()
+    if horizontal:
+        along, thick = (rect_mm.x1, rect_mm.x2), (rect_mm.y1, rect_mm.y2)
+    else:
+        along, thick = (rect_mm.y1, rect_mm.y2), (rect_mm.x1, rect_mm.x2)
+    top = base_z + cfg.floor_height_mm
+    if kind == "window":
+        z1 = base_z + cfg.window_sill_mm
+        z2 = z1 + cfg.window_height_mm
+    else:
+        z1, z2 = base_z, base_z + cfg.door_height_mm
+    boxes = []
+    if z1 > base_z:
+        boxes.append(_make_box(along, thick, base_z, z1, horizontal, "wall_infill"))
+    if z2 < top:
+        boxes.append(_make_box(along, thick, z2, top, horizontal, "wall_infill"))
+    tc = (thick[0] + thick[1]) / 2
+    pane_thick = (tc - cfg.pane_thickness_mm / 2, tc + cfg.pane_thickness_mm / 2)
+    boxes.append(_make_box(along, pane_thick, z1, z2, horizontal, f"pane_{kind}"))
+    return boxes
+
+
 def plan_to_boxes(plan, mm_per_px, cfg, base_z):
     ih = plan.image_size[1]
     walls_mm = [rect_px_to_mm(w, mm_per_px, ih) for w in plan.walls]
     openings = ([(rect_px_to_mm(o, mm_per_px, ih), "window") for o in plan.windows]
                 + [(rect_px_to_mm(o, mm_per_px, ih), "door") for o in plan.doors])
-    assigned = assign_openings(walls_mm, [r for r, _ in openings])
+    assigned, freestanding = assign_openings(walls_mm, [r for r, _ in openings])
     kind_of = {id(r): k for r, k in openings}
     boxes = []
     for i, w in enumerate(walls_mm):
         ops = [(r, kind_of[id(r)]) for r in assigned.get(i, [])]
         boxes.extend(wall_to_boxes(w, ops, cfg, base_z))
+    for r in freestanding:
+        boxes.extend(opening_to_boxes(r, kind_of[id(r)], cfg, base_z))
     for c in plan.columns:
         r = rect_px_to_mm(c, mm_per_px, ih)
         boxes.append(Box3D(r.x1, r.y1, base_z, r.x2, r.y2,
