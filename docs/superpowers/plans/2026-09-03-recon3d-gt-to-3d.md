@@ -1286,3 +1286,16 @@ cd /home/maren/programming/reconstruction_3d && git add recon3d && \
 - **Spec coverage:** 入力(GT開始・prediction互換ローダ)/前処理(px→mm・y反転)/形状生成(壁押し出し・開口・柱・スラブ)/出力(glTF+OBJ)/検証(再投影IoU・寸法整合) — 全てタスクに対応あり。1F/2F位置合わせはGTが同一CAD座標系(右端通り芯cx差0.5px実測)のため恒等変換とし、IoU検証で担保
 - **仮定値の明示:** ReconConfigに集約し report.json の assumptions に記録(Task5)
 - **型整合:** Rect/FloorPlan(Task1) → calibrate(Task2) → Box3D/plan_to_boxes(Task3) → boxes_to_scene(Task4) → build/verify(Task5/6) のシグネチャ一貫を確認済み
+
+---
+
+## 実行時の逸脱記録 (2026-09-03 実装完了)
+
+1. **開口の扱いを変更**: GT実測で窓/ドアは壁の隙間を埋める配置(壁との重なり最大20%)と判明。
+   「壁からの引き算」から「開口矩形への充填(wall_infill+pane)」へ変更。
+   重なり≥50%の場合のみ引き算(prediction.json互換のため両対応)。`OVERLAP_SUBTRACT=0.5`
+2. **フットプリント計算を修正**: 壁のみのunionでは開口の隙間で外周が閉じず断片化する。
+   壁+柱+開口のunionに変更(Task 5実装後の統合テストで発覚)
+3. **統合テストの寸法期待値を修正**: y方向の建物全長は11069mm(通り芯9555mmの外側に
+   ポーチ等の壁が突出)。期待値をGT壁bbox(773×924.9px)×スケール基準に変更
+4. **検証結果**: 全25テストPASS、再投影IoU 1F/2F共に1.0、スケール11.968mm/px(交差検証誤差0.28%)
