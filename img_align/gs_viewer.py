@@ -12,16 +12,59 @@
 """
 import base64
 import json
+import math
 from pathlib import Path
 
 import numpy as np
 
 from .config import SESSION
-from .meshing import OUT_DIR, SFX
+from .localize import PlanGrid
+from .meshing import (ISLANDS, OUT_DIR, SFX, apply_matrix, drawing_matrix,
+                      load_anchor, resolve_frames)
 
 VENDOR = Path(__file__).resolve().parent / "vendor" / "splat_main.js"
 MAX_SPLATS = 1_200_000
 FLOOR_SPLIT = 2.6          # 図面座標での1F/2F境界 [m]
+WARP_STEP_M = 1.0          # 軌跡ワープ点の間隔 (経路に沿って)
+
+
+def build_warps():
+    """軌跡に沿った約1m間隔のワープ点 [{l: ラベル, v: viewMatrix(16)}]
+
+    位置=実カメラ(図面座標→レンダラy下系)、視線=進行方向・水平。
+    viewMatrix は antimatter15 の列優先レイアウト。
+    """
+    R = np.array([[1.0, 0, 0], [0, 0, -1], [0, 1, 0]])   # 図面→レンダラ
+    warps = []
+    for isl in ISLANDS[SESSION]:
+        frames, anchor = resolve_frames(isl, verbose=False)
+        frames = sorted(frames, key=lambda f: f["name"])
+        M, _ = drawing_matrix(load_anchor(isl), PlanGrid(isl["floor"]),
+                              isl["z_off"], metric_input=True)
+        pos = apply_matrix(M, np.stack([f["t_m"] for f in frames]))
+        keep = [0]
+        acc = 0.0
+        for i in range(1, len(pos)):
+            acc += float(np.linalg.norm(pos[i, :2] - pos[i - 1, :2]))
+            if acc >= WARP_STEP_M:
+                keep.append(i)
+                acc = 0.0
+        for j, i in enumerate(keep):
+            p = pos[i] @ R.T
+            nxt = pos[keep[j + 1]] if j + 1 < len(keep) else pos[keep[j - 1]]
+            d = (nxt - pos[i]) if j + 1 < len(keep) else (pos[i] - nxt)
+            a, b = float(d[0]), float(d[1])          # 図面xy → レンダラxz
+            n = math.hypot(a, b) or 1.0
+            a, b = a / n, b / n
+            # c2w列: x=(b,0,-a), y=(0,1,0), z=(a,0,b) → viewMatrix=逆行列
+            x, y, z = np.array([b, 0, -a]), np.array([0, 1, 0]), \
+                np.array([a, 0, b])
+            vm = [x[0], y[0], z[0], 0, x[1], y[1], z[1], 0,
+                  x[2], y[2], z[2], 0,
+                  -float(x @ p), -float(y @ p), -float(z @ p), 1]
+            warps.append({"l": f"{isl['floor']} {frames[i]['name'][-6:]}",
+                          "v": [round(float(v), 4) for v in vm]})
+    return warps
 
 
 def read_3dgs_full(path):
@@ -84,6 +127,7 @@ HTML = """<!doctype html><html><head><meta charset="utf-8">
  <b>gaussian house __SESS__</b><br>
  階: <button id="fAll" class="on">全体</button><button id="f1F">1F</button><button id="f2F">2F</button><br>
  高さ: <button id="h13">1.3m</button><button id="h15">1.5m</button><br>
+ ワープ: <button id="wprev">◀</button><select id="wsel" style="max-width:110px"></select><button id="wnext">▶</button> (N/P)<br>
  <span style="color:#aaa">移動: ↑↓ / 旋回: A D / 見回し: ドラッグ</span>
 </div>
 <div id="fps"></div><div id="camid"></div><div id="caminfo"></div>
@@ -95,6 +139,7 @@ const B64 = "__B64__";
 function b64ToU8(s){const bin=atob(s);const u=new Uint8Array(bin.length);
  for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u;}
 const EMBED_FULL = b64ToU8(B64);
+const WARPS = __WARPS__;
 </script>
 <script>
 __MAINJS__
@@ -141,6 +186,30 @@ UI_JS = """
             document.getElementById(b).classList.remove("on");
         if (!was) btn.classList.add("on");
     }
+    // 軌跡ワープ (実撮影カメラの位置・進行方向へジャンプ)
+    let warpIdx = -1;
+    const wsel = document.getElementById("wsel");
+    for (let i = 0; i < WARPS.length; i++) {
+        const o = document.createElement("option");
+        o.value = i;
+        o.text = WARPS[i].l;
+        wsel.add(o);
+    }
+    function warpTo(i) {
+        if (!WARPS.length) return;
+        warpIdx = ((i % WARPS.length) + WARPS.length) % WARPS.length;
+        viewMatrix = WARPS[warpIdx].v.slice();
+        wsel.value = warpIdx;
+    }
+    wsel.addEventListener("change", () => warpTo(+wsel.value));
+    document.getElementById("wprev").addEventListener("click",
+        () => warpTo(warpIdx - 1));
+    document.getElementById("wnext").addEventListener("click",
+        () => warpTo(warpIdx + 1));
+    window.addEventListener("keydown", (e) => {
+        if (e.code === "KeyN") warpTo(warpIdx + 1);
+        if (e.code === "KeyP") warpTo(warpIdx - 1);
+    });
     for (const [id, fn] of [["fAll", (e) => postFloor("all")],
                             ["f1F", (e) => postFloor("1F")],
                             ["f2F", (e) => postFloor("2F")],
@@ -214,6 +283,7 @@ def main():
 
     js = patch_mainjs(VENDOR.read_text(), view0)
     html = (HTML.replace("__SESS__", SESSION)
+                .replace("__WARPS__", json.dumps(build_warps()))
                 .replace("__B64__", base64.b64encode(blob).decode())
                 .replace("__MAINJS__", js.replace("__SPLIT__", str(FLOOR_SPLIT))))
     out = OUT_DIR / f"gs_viewer{SFX}.html"
