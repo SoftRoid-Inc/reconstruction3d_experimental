@@ -165,6 +165,8 @@ def patch_mainjs(js, view0):
     js = (js[:a]
           + "    worker.postMessage({ buffer: splatData.buffer,\n"
           + "        vertexCount: Math.floor(splatData.length / rowLength) });\n"
+          + "    // 初回ソートをRAFに依存させない (非表示タブではframeループが止まる)\n"
+          + "    worker.postMessage({ view: multiply4(projectionMatrix, viewMatrix) });\n"
           + UI_JS
           + js[b:])
     # 3) carousel無効 + 初期カメラ
