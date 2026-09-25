@@ -171,12 +171,24 @@ UI_JS = """
         worker.postMessage({ buffer: out.buffer.slice(0, m * ROW),
                              vertexCount: m });
     }
-    // 高さプリセットはロック式トグル: 移動しても毎tick高さを再固定する
+    // 高さプリセットはロック式トグル + 常時オートレベリング
+    // (ドラッグ回転はカメラローカル軸なのでロールが蓄積する。ロールのみを
+    //  連続除去し、ヨー・ピッチ・位置は保持する)
     let lockedHeight = null;
     setInterval(() => {
-        if (lockedHeight === null) return;
         let inv = invert4(viewMatrix);
-        inv[13] = -lockedHeight;
+        const z = [inv[8], inv[9], inv[10]];
+        if (Math.hypot(z[0], z[2]) > 0.2) {       // ほぼ真上/真下は触らない
+            let x = [z[2], 0, -z[0]];
+            const n = Math.hypot(x[0], x[2]);
+            x = [x[0] / n, 0, x[2] / n];
+            const y = [z[1] * x[2] - z[2] * x[1],
+                       z[2] * x[0] - z[0] * x[2],
+                       z[0] * x[1] - z[1] * x[0]];
+            inv[0] = x[0]; inv[1] = x[1]; inv[2] = x[2];
+            inv[4] = y[0]; inv[5] = y[1]; inv[6] = y[2];
+        }
+        if (lockedHeight !== null) inv[13] = -lockedHeight;
         viewMatrix = invert4(inv);
     }, 50);
     function setHeight(h, btn) {
