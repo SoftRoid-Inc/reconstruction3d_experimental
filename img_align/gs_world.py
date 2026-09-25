@@ -33,7 +33,7 @@ DA360_CKPT = ("/code2/third_party/genie_sim/source/external/DA360/"
 PERSON_CUT_R = 2.0        # 撮影者カットの半径 [m]
 OPAC_MIN = 0.05
 MAX_LOCAL_R_M = 7.0       # カメラからこの距離を超えるガウシアンは捨てる (窓越し屋外)
-THIN_VOXEL = 0.02         # フレーム毎のボクセル間引き (不透明度優先でTop-2/ボクセル)
+THIN_VOXEL = 0.01         # フレーム毎のボクセル間引き (不透明度優先でTop-2/ボクセル)
 
 
 # ---------------------------------------------------------------- 共通
@@ -205,6 +205,8 @@ def cmd_merge(args):
 
     SH_C0 = 0.28209479
     bbox_lo, bbox_hi = plan_bbox_m()
+    cache_p = GW_DIR / SESSION / "scale_cache.json"
+    cache = json.loads(cache_p.read_text()) if cache_p.exists() else {}
     parts = []
     rng = np.random.default_rng(0)
     for fi, name in enumerate(done):
@@ -213,8 +215,13 @@ def cmd_merge(args):
                                      / "merged_gaussians.ply")
         xyz = np.stack([data["x"], data["y"], data["z"]], 1).astype(np.float64)
 
-        s_da = da360_scale(name, p["chunk_dir"], p["depth_scale"])
-        if fi == 0 or s_da is None or args.verify:
+        if name in cache and not args.verify:
+            s_m = float(cache[name])
+            keep = cut_person(xyz @ RY180.T, person_dirs_mask(name))
+            print(f"  {name}: s={s_m:.3f} (cache)")
+        else:
+          s_da = da360_scale(name, p["chunk_dir"], p["depth_scale"])
+          if fi == 0 or s_da is None or args.verify:
             # クロスチェック/フォールバック: PanoVGGTローカル点群とのNN探索
             ref_xyz, _ = read_ply_xyzrgb(
                 p["chunk_dir"] / "panovggt_out" / "pointclouds" / "per_frame"
@@ -231,11 +238,12 @@ def cmd_merge(args):
                 print(f"  {name}: s(depth)={s_m:.3f} s(NN)={s_nn_m:.3f} "
                       f"差{dev*100:.1f}%")
                 assert dev < 0.15, "スケール推定の不一致"
-        else:
+          else:
             s_m = s_da * p["depth_scale"]
-
-        # 撮影者カット (Ry180でVGGT規約ローカルに直してから方向判定)
-        keep = cut_person(xyz @ RY180.T, person_dirs_mask(name))
+          cache[name] = s_m
+          cache_p.write_text(json.dumps(cache, indent=1))
+          # 撮影者カット (Ry180でVGGT規約ローカルに直してから方向判定)
+          keep = cut_person(xyz @ RY180.T, person_dirs_mask(name))
 
         # 4x4: 図面 ← 島メートル ← ポーズ ← (s_m·Ry180)
         T_pose = np.eye(4)
@@ -265,18 +273,17 @@ def cmd_merge(args):
         _, nn = cam_tree.query(means[ok], k=k)
         nn = nn.reshape(len(nn), -1)
         ok_idx = np.where(ok)[0][(nn == fi).any(axis=1)]
-        # ボクセル間引き (不透明度優先でTop-2/2cmボクセル。1個だと点状の穴が出る)
+        # ボクセル間引き (不透明度優先でTop-2/ボクセル。1個だと点状の穴が出る)
         order = ok_idx[np.argsort(-opac[ok_idx])]
         cell = np.floor(means[order] / THIN_VOXEL).astype(np.int64)
         _, inv = np.unique(cell, axis=0, return_inverse=True)
-        seen = {}
-        take = np.zeros(len(order), bool)
-        for j, c in enumerate(inv):
-            cnt = seen.get(c, 0)
-            if cnt < 2:
-                take[j] = True
-                seen[c] = cnt + 1
-        ok_idx = order[take]
+        srt = np.argsort(inv, kind="stable")       # グループ順・opac降順を保持
+        starts = np.r_[0, np.flatnonzero(np.diff(inv[srt])) + 1]
+        first_of_group = np.zeros(len(srt), np.int64)
+        first_of_group[starts] = starts
+        np.maximum.accumulate(first_of_group, out=first_of_group)
+        rank = np.arange(len(srt)) - first_of_group
+        ok_idx = order[srt[rank < 2]]
         rgb = np.clip(0.5 + SH_C0 * np.stack(
             [data[f"f_dc_{i}"] for i in range(3)], 1)[keep], 0, 1)
         parts.append((means[ok_idx], quats[ok_idx], log_scales[ok_idx],
