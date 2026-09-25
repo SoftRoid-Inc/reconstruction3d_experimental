@@ -126,22 +126,33 @@ UI_JS = """
         worker.postMessage({ buffer: out.buffer.slice(0, m * ROW),
                              vertexCount: m });
     }
-    function setHeight(h) {
+    // 高さプリセットはロック式トグル: 移動しても毎tick高さを再固定する
+    let lockedHeight = null;
+    setInterval(() => {
+        if (lockedHeight === null) return;
         let inv = invert4(viewMatrix);
-        inv[13] = -h;
+        inv[13] = -lockedHeight;
         viewMatrix = invert4(inv);
+    }, 50);
+    function setHeight(h, btn) {
+        const was = lockedHeight === h;
+        lockedHeight = was ? null : h;
+        for (const b of ["h13", "h15"])
+            document.getElementById(b).classList.remove("on");
+        if (!was) btn.classList.add("on");
     }
-    for (const [id, fn] of [["fAll", () => postFloor("all")],
-                            ["f1F", () => postFloor("1F")],
-                            ["f2F", () => postFloor("2F")],
-                            ["h13", () => setHeight(1.3)],
-                            ["h15", () => setHeight(1.5)]]) {
+    for (const [id, fn] of [["fAll", (e) => postFloor("all")],
+                            ["f1F", (e) => postFloor("1F")],
+                            ["f2F", (e) => postFloor("2F")],
+                            ["h13", (e) => setHeight(1.3, e.target)],
+                            ["h15", (e) => setHeight(1.5, e.target)]]) {
         document.getElementById(id).addEventListener("click", (e) => {
-            if (id[0] === "f")
+            if (id[0] === "f") {
                 for (const b of ["fAll", "f1F", "f2F"])
                     document.getElementById(b).classList.remove("on");
-            e.target.classList.add("on");
-            fn();
+                e.target.classList.add("on");
+            }
+            fn(e);
         });
     }
 """
@@ -187,15 +198,19 @@ def main():
     R = np.array([[1.0, 0, 0], [0, 0, -1], [0, 1, 0]])
     z_draw = means[:, 2].copy()
     means = means @ R.T
-    r_quat = np.array([np.cos(-np.pi / 4), np.sin(-np.pi / 4), 0, 0])
+    # 位置の回転Rと同一の回転 (Rx(+90°)相当)。符号を誤ると斜め向きの
+    # 異方性スプラットが鏡映方向に傾く (レビューC1)
+    r_quat = np.array([np.cos(np.pi / 4), np.sin(np.pi / 4), 0, 0])
     quats = quat_mul(r_quat, quats)
     blob, n = to_splat_bytes(means, quats, log_scales, rgb, opac)
 
     # 初期カメラ: 1F重心の上、高さ1.5m、+z'(図面+y)向き
     m1 = means[z_draw < FLOOR_SPLIT]
     cx, cz = float(np.median(m1[:, 0])), float(np.median(m1[:, 2]))
+    # viewMatrixの並進は −(カメラ位置)。カメラ高さ1.5m = ワールドy'=-1.5 →
+    # 第14要素は +1.5 (符号を誤ると床下からの初期視点になる。レビューI1)
     view0 = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,
-             round(-cx, 3), -1.5, round(-cz, 3), 1]
+             round(-cx, 3), 1.5, round(-cz, 3), 1]
 
     js = patch_mainjs(VENDOR.read_text(), view0)
     html = (HTML.replace("__SESS__", SESSION)
