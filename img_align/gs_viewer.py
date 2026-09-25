@@ -306,8 +306,13 @@ def patch_mainjs(js, view0):
 
 
 def main():
-    means, quats, log_scales, rgb, opac = read_3dgs_full(
-        OUT_DIR / f"gaussian_house{SFX}.ply")
+    ap = __import__("argparse").ArgumentParser()
+    ap.add_argument("--ply", default=None, help="入力3DGS ply (既定: gaussian_house{SFX}.ply)")
+    ap.add_argument("--suffix", default="", help="出力名の接尾辞 (例 _pr)")
+    ap.add_argument("--max-splats", type=int, default=MAX_SPLATS)
+    args = ap.parse_args()
+    ply = args.ply or (OUT_DIR / f"gaussian_house{SFX}.ply")
+    means, quats, log_scales, rgb, opac = read_3dgs_full(ply)
     warps = build_warps(means_draw=means[opac > 0.3])
     # 図面座標(z上) → レンダラ規約(y下): Rx(-90°)
     R = np.array([[1.0, 0, 0], [0, 0, -1], [0, 1, 0]])
@@ -317,7 +322,8 @@ def main():
     # 異方性スプラットが鏡映方向に傾く (レビューC1)
     r_quat = np.array([np.cos(np.pi / 4), np.sin(np.pi / 4), 0, 0])
     quats = quat_mul(r_quat, quats)
-    blob, n = to_splat_bytes(means, quats, log_scales, rgb, opac)
+    blob, n = to_splat_bytes(means, quats, log_scales, rgb, opac,
+                             max_n=args.max_splats)
 
     # 初期カメラ: 1F重心の上、高さ1.5m、+z'(図面+y)向き
     m1 = means[z_draw < FLOOR_SPLIT]
@@ -328,11 +334,11 @@ def main():
              round(-cx, 3), 1.5, round(-cz, 3), 1]
 
     js = patch_mainjs(VENDOR.read_text(), view0)
-    html = (HTML.replace("__SESS__", SESSION)
+    html = (HTML.replace("__SESS__", SESSION + args.suffix)
                 .replace("__WARPS__", json.dumps(warps))
                 .replace("__B64__", base64.b64encode(blob).decode())
                 .replace("__MAINJS__", js.replace("__SPLIT__", str(FLOOR_SPLIT))))
-    out = OUT_DIR / f"gs_viewer{SFX}.html"
+    out = OUT_DIR / f"gs_viewer{args.suffix}{SFX}.html"
     out.write_text(html)
     print(f"-> {out} ({n:,} splats, {out.stat().st_size/1e6:.0f} MB)")
 

@@ -164,7 +164,7 @@ def merge():
     print(f"-> {out} ({len(merged[0]):,} gaussians)")
 
 
-def check():
+def check(ply=None, suffix=""):
     """GS中心点の壁整合を点群評価と同じ物差しで見る + 真上ビュー"""
     import matplotlib
     matplotlib.use("Agg")
@@ -173,7 +173,7 @@ def check():
     from .eval_gt_traj import MM_PER_PX
     from .meshing import wall_distance_stats
     from .refine_align import wall_face_segments_px
-    d = read_3dgs_centers(OUT_DIR / f"gaussian_house{SFX}.ply")
+    d = read_3dgs_centers(ply or OUT_DIR / f"gaussian_house{SFX}.ply")
     res = {}
     fig, axes = plt.subplots(1, 2, figsize=(20, 6))
     for ax, (floor, z_off) in zip(axes, (("1F", 0.0), ("2F", 2.9))):
@@ -190,9 +190,10 @@ def check():
         ax.set_title(f"GS {floor}: med {t.get('median_m', '-')}m "
                      f"cover {t.get('wall_coverage', '-')}")
     fig.tight_layout()
-    fig.savefig(OUT_DIR / f"gs_check{SFX}.png", dpi=100, facecolor="#181820")
+    fig.savefig(OUT_DIR / f"gs_check{suffix}{SFX}.png", dpi=100,
+                facecolor="#181820")
     print(json.dumps(res, indent=1))
-    print(f"-> {OUT_DIR / f'gs_check{SFX}.png'}")
+    print(f"-> {OUT_DIR / f'gs_check{suffix}{SFX}.png'}")
 
 
 def read_3dgs_centers(path):
@@ -210,11 +211,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--ply", default=None)
+    ap.add_argument("--suffix", default="")
     args = ap.parse_args()
     if args.selftest:
         selftest()
     elif args.check:
-        check()
+        check(ply=args.ply, suffix=args.suffix)
     else:
         merge()
 

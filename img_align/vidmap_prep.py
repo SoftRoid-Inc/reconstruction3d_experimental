@@ -13,7 +13,6 @@ import argparse
 import json
 
 import numpy as np
-import py360convert
 from PIL import Image
 from scipy import ndimage
 
@@ -37,6 +36,8 @@ def load_person_mask(frame_name, dilate=6):
 
 
 def main():
+    # 透視変換はこのCLI専用 (load_person_maskだけ使う環境に依存を強いない)
+    import py360convert
     ap = argparse.ArgumentParser()
     ap.add_argument("--fov", type=float, default=100.0)
     ap.add_argument("--yaw", type=float, default=0.0,
