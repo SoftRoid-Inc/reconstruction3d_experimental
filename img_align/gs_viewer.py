@@ -28,10 +28,30 @@ FLOOR_SPLIT = 2.6          # 図面座標での1F/2F境界 [m]
 WARP_STEP_M = 1.0          # 軌跡ワープ点の間隔 (経路に沿って)
 
 
-def build_warps():
+MIN_CLEARANCE_M = 1.2      # 前方にこの距離未満で面があるワープ点は捨てる
+
+
+def forward_clearance(p, fwd, pts2d):
+    """カメラ高さ帯の点群に対する前方(±30°)の見通し距離 [m]"""
+    rel = pts2d - p[None, :2]
+    dist = np.linalg.norm(rel, axis=1)
+    near = dist < 6.0
+    if not near.any():
+        return np.inf
+    rel, dist = rel[near], dist[near]
+    cosang = (rel @ fwd[:2]) / np.maximum(dist * np.hypot(*fwd[:2]), 1e-9)
+    in_cone = cosang > np.cos(np.radians(30))
+    if in_cone.sum() < 30:
+        return np.inf
+    return float(np.percentile(dist[in_cone], 10))
+
+
+def build_warps(means_draw=None):
     """軌跡に沿った約1m間隔のワープ点 [{l: ラベル, v: viewMatrix(16)}]
 
     位置=実カメラ(図面座標→レンダラy下系)、視線=進行方向・水平。
+    means_draw(図面座標のガウシアン中心)を渡すと、前方1.2m未満に面がある
+    地点(クローゼット内・壁直前)を除外する。
     viewMatrix は antimatter15 の列優先レイアウト。
     """
     R = np.array([[1.0, 0, 0], [0, 0, -1], [0, 1, 0]])   # 図面→レンダラ
@@ -49,13 +69,25 @@ def build_warps():
             if acc >= WARP_STEP_M:
                 keep.append(i)
                 acc = 0.0
+        # クリアランス判定用: この階のカメラ高さ帯にある中心点のxy
+        pts2d = None
+        if means_draw is not None:
+            zc = float(np.median(pos[:, 2]))
+            band = means_draw[(means_draw[:, 2] > zc - 0.5)
+                              & (means_draw[:, 2] < zc + 0.5)]
+            pts2d = band[:, :2]
+        n_drop = 0
         for j, i in enumerate(keep):
-            p = pos[i] @ R.T
             nxt = pos[keep[j + 1]] if j + 1 < len(keep) else pos[keep[j - 1]]
             d = (nxt - pos[i]) if j + 1 < len(keep) else (pos[i] - nxt)
             a, b = float(d[0]), float(d[1])          # 図面xy → レンダラxz
             n = math.hypot(a, b) or 1.0
             a, b = a / n, b / n
+            if pts2d is not None and forward_clearance(
+                    pos[i], np.array([a, b]), pts2d) < MIN_CLEARANCE_M:
+                n_drop += 1
+                continue
+            p = pos[i] @ R.T
             # c2w列: x=(b,0,-a), y=(0,1,0), z=(a,0,b) → viewMatrix=逆行列
             x, y, z = np.array([b, 0, -a]), np.array([0, 1, 0]), \
                 np.array([a, 0, b])
@@ -64,6 +96,8 @@ def build_warps():
                   -float(x @ p), -float(y @ p), -float(z @ p), 1]
             warps.append({"l": f"{isl['floor']} {frames[i]['name'][-6:]}",
                           "v": [round(float(v), 4) for v in vm]})
+        if n_drop:
+            print(f"  {isl['tag']}: warp {n_drop} 点をクリアランス不足で除外")
     return warps
 
 
@@ -95,8 +129,7 @@ def quat_mul(r, q):
 
 def to_splat_bytes(means, quats, log_scales, rgb, opac, max_n=MAX_SPLATS):
     """antimatter15 .splat 形式 (32B/個)。寄与順(不透明度×体積)で間引き"""
-    w = opac * np.exp(log_scales).prod(1) ** (1 / 3)
-    idx = np.argsort(-w)[:max_n]
+    idx = np.argsort(-opac)[:max_n]
     buf = np.zeros(len(idx), dtype=[("pos", "f4", 3), ("scale", "f4", 3),
                                     ("rgba", "u1", 4), ("quat", "u1", 4)])
     buf["pos"] = means[idx]
@@ -275,6 +308,7 @@ def patch_mainjs(js, view0):
 def main():
     means, quats, log_scales, rgb, opac = read_3dgs_full(
         OUT_DIR / f"gaussian_house{SFX}.ply")
+    warps = build_warps(means_draw=means[opac > 0.3])
     # 図面座標(z上) → レンダラ規約(y下): Rx(-90°)
     R = np.array([[1.0, 0, 0], [0, 0, -1], [0, 1, 0]])
     z_draw = means[:, 2].copy()
@@ -295,7 +329,7 @@ def main():
 
     js = patch_mainjs(VENDOR.read_text(), view0)
     html = (HTML.replace("__SESS__", SESSION)
-                .replace("__WARPS__", json.dumps(build_warps()))
+                .replace("__WARPS__", json.dumps(warps))
                 .replace("__B64__", base64.b64encode(blob).decode())
                 .replace("__MAINJS__", js.replace("__SPLIT__", str(FLOOR_SPLIT))))
     out = OUT_DIR / f"gs_viewer{SFX}.html"

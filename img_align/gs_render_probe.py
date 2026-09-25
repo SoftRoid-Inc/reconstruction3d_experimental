@@ -15,6 +15,7 @@ import cv2
 import os
 
 SESSION = os.environ.get("IMG_SESSION", "0828")
+WARP_EXTRA = int(os.environ.get("WARP_EXTRA", "30"))
 SFX = "" if SESSION == "0828" else f"_{SESSION}"
 OUT_DIR = Path(__file__).resolve().parent / "results" / "backend"
 
@@ -67,7 +68,7 @@ def main():
     # ワープ点と同じポーズ (ユーザーが見るもの)
     import json
     w = json.loads((OUT_DIR / f"warps_{SESSION}.json").read_text())
-    for wi in (2, 10, 20):
+    for wi in (2, 10, 20, WARP_EXTRA):
         vm = np.array(w[wi]["v"]).reshape(4, 4).T   # 列優先→行列
         c2w_r = np.linalg.inv(vm)
         # レンダラ座標(y下)→図面座標: 逆回転 Rx(-90)

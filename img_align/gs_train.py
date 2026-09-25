@@ -87,7 +87,7 @@ def eval_holdout(params, data, dev):
     return float(np.mean(psnrs))
 
 
-def train(tag, iters):
+def train(tag, iters, clean=False, ckpt_name="ckpt.npz"):
     dev = "cuda"
     data = Dataset(tag)
     params = init_params(tag, dev)
@@ -110,6 +110,12 @@ def train(tag, iters):
         ls = 1 - ssim((render[0] * mask).permute(2, 0, 1)[None],
                       (img * mask).permute(2, 0, 1)[None])
         loss = 0.8 * l1 + 0.2 * ls
+        if clean:
+            # フローター対策: 霞ガウシアンの抑制 (不透明度の希薄化 + 巨大スケール罰)
+            op = torch.sigmoid(params["opacities"])
+            sc = torch.exp(params["scales"])
+            loss = loss + 0.01 * op.mean() \
+                 + 0.05 * torch.relu(sc.max(dim=1).values - 0.5).mean()
         loss.backward()
         strategy.step_post_backward(params, opts, state, it, info,
                                     packed=False)
@@ -122,14 +128,14 @@ def train(tag, iters):
     psnr = eval_holdout(params, data, dev)
     with torch.no_grad():
         np.savez_compressed(
-            GS_DIR / tag / "ckpt.npz",
+            GS_DIR / tag / ckpt_name,
             means=params["means"].cpu().numpy(),
             quats=F.normalize(params["quats"], dim=-1).cpu().numpy(),
             log_scales=params["scales"].cpu().numpy(),
             logit_opacities=params["opacities"].cpu().numpy(),
             sh0=params["sh0"].cpu().numpy(),
             shN=params["shN"].cpu().numpy())
-    (GS_DIR / tag / "train_log.json").write_text(json.dumps(
+    (GS_DIR / tag / f"train_log_{ckpt_name}.json").write_text(json.dumps(
         {"psnr_holdout": round(psnr, 2), "iters": iters,
          "n_gs": len(params["means"])}))
     print(f"{tag}: holdout PSNR {psnr:.2f} dB, "
@@ -140,8 +146,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag", required=True)
     ap.add_argument("--iters", type=int, default=20000)
+    ap.add_argument("--clean", action="store_true",
+                    help="フローター対策の正則化を有効化")
+    ap.add_argument("--ckpt-name", default="ckpt.npz")
     args = ap.parse_args()
-    train(args.tag, args.iters)
+    train(args.tag, args.iters, clean=args.clean, ckpt_name=args.ckpt_name)
 
 
 if __name__ == "__main__":
