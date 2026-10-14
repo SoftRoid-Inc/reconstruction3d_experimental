@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>aligned_house 点群ビューア</title>
+<style>
+  html,body{margin:0;height:100%;background:#101014;color:#ddd;font-family:sans-serif;overflow:hidden}
+  #c{width:100%;height:100%;display:block;cursor:grab}
+  #ui{position:fixed;top:10px;left:10px;background:rgba(20,20,28,.85);padding:10px 14px;border-radius:8px;font-size:12px;line-height:1.9}
+  #ui label{display:block}
+  #ui input[type=range]{width:150px;vertical-align:middle}
+  button{margin-right:4px;background:#2a2a38;color:#ddd;border:1px solid #555;border-radius:4px;padding:2px 8px;cursor:pointer}
+  button:hover{background:#3a3a4c}
+  #hint{position:fixed;bottom:8px;left:10px;font-size:11px;color:#888}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <b>aligned_house.ply</b> (図面座標・508k点)<br>
+  <label>点サイズ <input id="ps" type="range" min="1" max="6" step="0.5" value="2"></label>
+  <label>高さ下限 <input id="h0" type="range" min="-0.5" max="6" step="0.1" value="-0.5"> <span id="h0v"></span>m</label>
+  <label>高さ上限 <input id="h1" type="range" min="-0.5" max="6" step="0.1" value="6"> <span id="h1v"></span>m</label>
+  <div>
+    <button onclick="setH(-0.5,6)">全体</button>
+    <button onclick="setH(-0.3,2.5)">1Fのみ</button>
+    <button onclick="setH(2.5,6)">2Fのみ</button>
+    <button onclick="topView()">真上から</button>
+  </div>
+</div>
+<div id="hint">左ドラッグ=回転 / ホイール=ズーム / 右ドラッグ or Shift+ドラッグ=平行移動。青=1F図面壁、水色=2F図面壁</div>
+<script>
+/*DATA*/
+</script>
+<script>
+"use strict";
+const raw = Uint8Array.from(atob(B64), c => c.charCodeAt(0));
+const N = META.n;
+const q = new Uint16Array(raw.buffer, 0, N*3);
+const col = new Uint8Array(raw.buffer, N*6, N*3);
+const lo = META.lo, hi = META.hi;
+// 高さスライダーは点群の実レンジに合わせる (6m固定だと3階+小屋組が消える)
+h0.min = h1.min = Math.floor(lo[2] * 10) / 10;
+h0.max = h1.max = Math.ceil(hi[2] * 10) / 10;
+h0.value = h0.min;
+h1.value = h1.max;
+const pos = new Float32Array(N*3);
+for (let i=0;i<N;i++){
+  const x = lo[0] + q[i*3]/65535*(hi[0]-lo[0]);
+  const y = lo[1] + q[i*3+1]/65535*(hi[1]-lo[1]);
+  const z = lo[2] + q[i*3+2]/65535*(hi[2]-lo[2]);
+  pos[i*3]=x; pos[i*3+1]=-y; pos[i*3+2]=z;  // 図面yは下向き→表示は反転
+}
+const cx=(lo[0]+hi[0])/2, cy=-(lo[1]+hi[1])/2, cz=(lo[2]+hi[2])/2;
+
+const canvas=document.getElementById("c");
+const gl=canvas.getContext("webgl",{antialias:false});
+const vs=`attribute vec3 aP;attribute vec3 aC;uniform mat4 uM;uniform float uS;
+varying vec3 vC;varying float vH;
+void main(){gl_Position=uM*vec4(aP,1.0);gl_PointSize=uS;vC=aC/255.0;vH=aP.z;}`;
+const fs=`precision mediump float;varying vec3 vC;varying float vH;
+uniform float uH0,uH1;
+void main(){if(vH<uH0||vH>uH1)discard;gl_FragColor=vec4(vC,1.0);}`;
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);
+if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))throw gl.getShaderInfoLog(o);return o;}
+const prog=gl.createProgram();
+gl.attachShader(prog,sh(gl.VERTEX_SHADER,vs));gl.attachShader(prog,sh(gl.FRAGMENT_SHADER,fs));
+gl.linkProgram(prog);gl.useProgram(prog);
+function buf(data,attr,type,norm){const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);
+gl.bufferData(gl.ARRAY_BUFFER,data,gl.STATIC_DRAW);const a=gl.getAttribLocation(prog,attr);
+gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,3,type,norm,0,0);}
+buf(pos,"aP",gl.FLOAT,false);
+buf(col,"aC",gl.UNSIGNED_BYTE,false);
+const uM=gl.getUniformLocation(prog,"uM"),uS=gl.getUniformLocation(prog,"uS"),
+      uH0=gl.getUniformLocation(prog,"uH0"),uH1=gl.getUniformLocation(prog,"uH1");
+
+let theta=-1.0, phi=0.9, dist=14, panX=0, panY=0, panZ=0;
+function mat(){
+  const w=canvas.width,h=canvas.height,f=1/Math.tan(0.4),asp=w/h,zn=0.1,zf=200;
+  const ex=cx+panX+dist*Math.cos(phi)*Math.cos(theta),
+        ey=cy+panY+dist*Math.cos(phi)*Math.sin(theta),
+        ez=cz+panZ+dist*Math.sin(phi);
+  const tx=cx+panX,ty=cy+panY,tz=cz+panZ;
+  let zx=ex-tx,zy=ey-ty,zz=ez-tz;const zl=Math.hypot(zx,zy,zz);zx/=zl;zy/=zl;zz/=zl;
+  let xx=zy*1-0*zz, xy=0*zz*0, dummy=0; // right = up × z, up=(0,0,1)
+  xx=-zy; xy=zx; let xz=0; const xl=Math.hypot(xx,xy,xz)||1;xx/=xl;xy/=xl;
+  const yx=zy*xz-zz*xy, yy=zz*xx-zx*xz, yz=zx*xy-zy*xx;
+  const tex=-(xx*ex+xy*ey+xz*ez), tey=-(yx*ex+yy*ey+yz*ez), tez=-(zx*ex+zy*ey+zz*ez);
+  const V=[xx,yx,zx,0, xy,yy,zy,0, xz,yz,zz,0, tex,tey,tez,1];
+  const P=[f/asp,0,0,0, 0,f,0,0, 0,0,(zf+zn)/(zn-zf),-1, 0,0,2*zf*zn/(zn-zf),0];
+  const M=new Float32Array(16);
+  for(let r=0;r<4;r++)for(let c2=0;c2<4;c2++){let s=0;for(let k=0;k<4;k++)s+=V[r*4+k]*P[k*4+c2];M[r*4+c2]=s;}
+  return M;
+}
+function draw(){
+  canvas.width=innerWidth;canvas.height=innerHeight;
+  gl.viewport(0,0,canvas.width,canvas.height);
+  gl.clearColor(0.06,0.06,0.08,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST);
+  gl.uniformMatrix4fv(uM,false,mat());
+  gl.uniform1f(uS,parseFloat(ps.value));
+  gl.uniform1f(uH0,parseFloat(h0.value));gl.uniform1f(uH1,parseFloat(h1.value));
+  h0v.textContent=h0.value; h1v.textContent=h1.value;
+  gl.drawArrays(gl.POINTS,0,N);
+  requestAnimationFrame(draw);
+}
+let drag=null;
+canvas.addEventListener("mousedown",e=>{drag={x:e.clientX,y:e.clientY,b:e.button,sh:e.shiftKey};});
+addEventListener("mouseup",()=>drag=null);
+addEventListener("mousemove",e=>{
+  if(!drag)return;
+  const dx=e.clientX-drag.x, dy=e.clientY-drag.y;drag.x=e.clientX;drag.y=e.clientY;
+  if(drag.b===2||drag.sh){
+    const s=dist*0.0015;
+    panX+=(-dx*Math.sin(theta)-dy*Math.cos(theta)*Math.sin(phi))*s;
+    panY+=( dx*Math.cos(theta)-dy*Math.sin(theta)*Math.sin(phi))*s;
+    panZ+=dy*Math.cos(phi)*s;
+  }else{theta-=dx*0.005;phi=Math.min(1.55,Math.max(-0.2,phi+dy*0.005));}
+});
+canvas.addEventListener("wheel",e=>{dist*=e.deltaY>0?1.1:0.9;dist=Math.max(1,Math.min(80,dist));e.preventDefault()},{passive:false});
+canvas.addEventListener("contextmenu",e=>e.preventDefault());
+function setH(a,b){h0.value=a;h1.value=b;}
+function topView(){phi=1.55;}
+draw();
+</script>
+</body>
+</html>

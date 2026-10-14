@@ -8,11 +8,17 @@
 フェーズ2(現在・優先): GTデータを入力に3次元再構成の開発を進める。
 再学習済みモデルが来たら prediction.json 互換で差し替える。
 詳細は `MODEL_RECONSTRUCTION.md` を参照。
+並行検討(フェーズ2と並行、優先度は変えない): 撮影画像(360°動画フレーム)から
+窓・壁・床・天井・階段・扉・柱を検出し間取り図と位置合わせする。
+仮説=画像と図面の抽象的特徴の対応から撮影軌跡をある程度推論できる。
+位置合わせ確立後、撮影由来の点群(ユーザー提供)と図面由来3Dモデルの統合につなげる。
+詳細は `IMAGE_ALIGNMENT.md` を参照。
 
 ## データ構成
 - `28-XXXXX/zumen/` — 物件ごとの図面 (1F.jpg, 2F.jpg) と正解データ (1F.json, 2F.json = labelme形式)
   - 正解ラベル: wall / column / window / door (全て rectangle、元画像ピクセル座標)
   - 28-AAAAA: 正解データあり(整列済み)。28-DDDDD: 図面のみ
+- `28-AAAAA/video_data/` — 実際の撮影データ(360°動画フレーム、5376x2688、`0828/images/` に454枚)
 - `cubicasa/` — CubiCasa5kによる2D抽出の検討一式
   - `run_cubicasa.py` 推論 / `align_gt.py` GT整列 / `compare_gt.py` GT比較評価
   - `results/` 推論・評価結果 (`results/28-AAAAA/eval_summary.txt` に評価まとめ)

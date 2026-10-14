@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 recon3d/output/
 .pytest_cache/
+img_align_backup_latest.tgz
