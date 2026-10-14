@@ -11,6 +11,8 @@
   mapany  : MapAnythingポーズ条件付け (→macondタグ。要mapanythingコンテナ)
   interp  : macond制御点×pvチェーン形状の全フレーム補間 (→mafタグ)
   anchor  : コーナーRANSACで図面アンカー (全周島向け。→anchor_<tag>_corners.json)
+            ※--segments imu では階ラベルが要る。backend/floor_assign.json を
+              置くと自動で流し込まれる (core/floor_assign --template で雛形)
   hier    : 分割サブ島へ親アンカーを移送+壁ICP (→anchor_<tag>_hier.json)
   export  : アンカー済み点群を図面座標へ書き出し (aligned_house_<sess>_auto.ply)
   viewer  : 確認画像+WebGLビューア生成
@@ -78,6 +80,12 @@ def stage_chunks_chains(args):
                                  manifest_out=args.manifest_out,
                                  stride=args.stride, max_seg=args.max_seg,
                                  model=args.model)
+        # IMU区間は階ラベルを持たない。手動割当 (backend/floor_assign.json) が
+        # あれば流し込む。無ければ floor=None のままで後段がskipする
+        from img_align.core.floor_assign import apply as apply_floors
+        manifest = apply_floors(manifest)
+        from img_align.config import BENCH_DIR
+        (BENCH_DIR / args.manifest_out).write_text(json.dumps(manifest, indent=1))
     return manifest
 
 
@@ -141,10 +149,22 @@ def _anchor_one(args):
 
 
 def post_anchor(manifest, jobs=None):
-    """島は互いに独立なのでプロセス並列で回す (1島あたり数十秒〜数分)"""
+    """全島を直接アンカーする (島は互いに独立なのでプロセス並列)
+
+    かつては分割サブ島を除外して hier (親からの移送) に回していたが、
+    (1) `--max-seg` 分割では**親island自体が作られない**ので移送元が無い、
+    (2) 新スコアではサブ島も単独でアンカーできる (0912で7/7成功、0.26〜0.96m)
+    の2点から、直接アンカーを既定にした (2026-10-14)。
+    hier は直接アンカーが失敗した島の保険として残す。
+    """
     import concurrent.futures as cf
+    no_floor = [m["tag"] for m in manifest if not m.get("floor")]
+    if no_floor:
+        print(f"[anchor] 階が未割当の島をskip: {no_floor}\n"
+              f"  → python -m img_align.core.floor_assign --template "
+              f"で雛形を作り、backend/floor_assign.json を編集してください")
     todo = [(m["tag"], m["floor"], os.environ["IMG_SESSION"])
-            for m in manifest if not m["tag"][-1].isdigit()]  # サブ島は hier で
+            for m in manifest if m.get("floor")]
     if not todo:
         return
     jobs = jobs or min(len(todo), max(1, (os.cpu_count() or 4) // 4))
@@ -163,9 +183,11 @@ def post_hier(manifest):
     from img_align.config import OUT_DIR
     from img_align.postproc.hier_anchor import hier_anchor
     for m in manifest:
-        if not m["tag"][-1].isdigit():
+        parent = m.get("parent")
+        if not parent:
             continue
-        parent = m["tag"].rstrip("0123456789")
+        if (OUT_DIR / f"anchor_{m['tag']}_corners.json").exists():
+            continue        # 直接アンカーが成功した島は触らない
         tp = OUT_DIR / f"corner_anchor_{parent}.json"
         if not tp.exists():
             print(f"[hier] {m['tag']}: 親 {parent} のアンカーなし -> skip")

@@ -490,20 +490,24 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
     pre.sort(key=lambda x: -x[0])
     print(f"候補 {len(cands)} -> 足切り後 {len(pre)} -> ICP {min(len(pre), ICP_TOP_K)}本")
 
-    best = None
+    best, scores = None, []
     for _, cnd in pre[:ICP_TOP_K]:
         s2, th2, t2, resid = icp_to_walls(wall_pts, segs,
                                           cnd["s"], cnd["th"], cnd["t"])
         v = scorer(s2, th2, t2)
         if v["cam_feas"] < 0.3:
             continue
+        scores.append(v["f1_feas_scale"])
         if best is None or v["f1_feas_scale"] > best[0]:
             best = (v["f1_feas_scale"], (s2, th2, t2, resid, cnd["n"]), v)
     if best is None:
         raise RuntimeError(f"{tag}: 全候補がカメラ妥当性/連続性で棄却された")
     s2, th2, t2, resid, n_in = best[1]
     v = best[2]
-    print(f"selected: {n_in} inliers, score {best[0]:.4f} "
+    # 1位と2位の差。正解が候補に無いと候補同士が拮抗して小さくなる (信頼度の手掛かり)
+    top = sorted(scores, reverse=True)
+    margin = float(top[0] - top[1]) if len(top) > 1 else float(top[0])
+    print(f"selected: {n_in} inliers, score {best[0]:.4f} (margin {margin:.4f}) "
           f"(P {v['precision']:.3f} / R {v['recall']:.3f} / "
           f"feas {v['cam_feas']:.2f} / Δs {v['scale_dev']:.2f}), "
           f"resid {resid:.3f}m, th={math.degrees(th2) % 360:.1f} s={s2:.3f}")
@@ -522,6 +526,7 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
         "s": float(s2), "th": float(th2), "t": [float(v) for v in t2],
         "wall_resid_m": resid,
         "score": round(float(best[0]), 4),
+        "margin": round(margin, 4),
         "wall_cover": round(float(v["precision"]), 4),
         "wall_recall": round(float(v["recall"]), 4),
         "cam_feas": round(float(v["cam_feas"]), 4),
@@ -536,7 +541,7 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
         json.dumps(track, indent=1))
     print(f"-> anchor_{tag}{suffix}.json / corner_anchor_{tag}.json")
     if return_info:
-        return track, {"score": float(best[0]),
+        return track, {"score": float(best[0]), "margin": margin,
                        "wall_cover": float(v["precision"]),
                        "wall_recall": float(v["recall"]),
                        "wall_resid_m": resid,

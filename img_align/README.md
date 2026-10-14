@@ -4,6 +4,12 @@
 **任意後処理**(回転修復・MapAnything条件付け・図面アンカー等)を積む構成。
 
 ```bash
+# 本番 (GTなし): 推論 → 手動で階を割当 → アンカー以降
+python -m img_align.pipeline run --session 0912 --segments imu --max-seg 160 --no-eval
+python -m img_align.core.floor_assign --template   # 雛形を編集して階を割り当てる
+python -m img_align.pipeline run --session 0912 --segments imu --max-seg 160 \
+    --post anchor,hier,export,viewer --no-eval
+
 # メイン一発 (prep → chunks → chains → eval)
 python -m img_align.pipeline run --session 0616
 
@@ -133,9 +139,9 @@ import時に凍結するため、必ずenv設定後にimportされる)。
 |---|---|
 | `config.py` | セッション/物件レジストリ・パス・SESSION_CFG(唯一のIMG_SESSION読取り元) |
 | `pipeline.py` | メインCLI(上記4段+後処理のオーケストレーション) |
-| `core/` | `panovggt`(チャンク推論subprocess) `pi3`(Pi3/Pi3-FT推論、PanoVGGT互換出力) `chunking`(島計画) `chaining`(連結) `crops`(e2pクロップ) `plan_grid`(図面グリッド) `geometry`(Sim3/重力/ヨー統計) `io_ply` |
-| `postproc/` | 上表の後処理+`anchor_score`(候補スコア) `scale_prior`(m_per_unitの供給源) `density_map`(壁密度地図) `plan_match`(FFTグリッド照合) `plan_icp`(point-to-line ICP・座標変換ユーティリティ) `anchor`(島アンカー本体・prepare_island) |
-| `eval/` | `gt_traj`(GT読込・MM_PER_PX・GTは物件ごとの trajectory_points.csv) `frontend`(フィットATE) `chunk_cmp`(チャンク単体採点+`gt_interp`) `floor_overlay`(階別の図面オーバーレイ比較) `overview`(島別色分け) `island_diag`(島内診断) `depth`(壁面残差で点群品質比較) |
+| `core/` | `panovggt`(チャンク推論subprocess) `panovggt_batch`(一括推論=モデル読込1回) `floor_assign`(手動の階割当) `floor_seq`(IMU遷移からの階決定。2/6セッションのみ) `pi3`(Pi3/Pi3-FT推論、PanoVGGT互換出力) `chunking`(島計画) `chaining`(連結) `crops`(e2pクロップ) `plan_grid`(図面グリッド) `geometry`(Sim3/重力/ヨー統計) `io_ply` |
+| `postproc/` | 上表の後処理+`anchor_score`(候補スコア) `scale_prior`(m_per_unitの供給源) `island_quality`(島の指紋の濃さ。判別力は無かった) `metric_stitch`(図面なしメートル化。不発) `density_map`(壁密度地図) `plan_match`(FFTグリッド照合) `plan_icp`(point-to-line ICP・座標変換ユーティリティ) `anchor`(島アンカー本体・prepare_island) |
+| `eval/` | `anchor_oracle`(候補に正解があるか) `anchor_confidence`(GT無しで当たりを見分ける指標) `anchor_overlay`(アンカー素の出力) `density_view`(密度地図) `outdoor_proxy`(屋外島の暫定判定) `scale_probe` `gt_traj`(GT読込・MM_PER_PX・GTは物件ごとの trajectory_points.csv) `frontend`(フィットATE) `chunk_cmp`(チャンク単体採点+`gt_interp`) `floor_overlay`(階別の図面オーバーレイ比較) `overview`(島別色分け) `island_diag`(島内診断) `depth`(壁面残差で点群品質比較) |
 | `out/` | `export` `viewer` |
 | `tools/` | `align_tool`(ブラウザ手動登録) `mask_eval_tool` `boundary_mask`(敷地マスク) `model_bench`(3モデル×窓の比較ドライバ) |
 | `gs/` `mesh/` | Gaussian Splatting / メッシュ・衝突モデル の各系統 |

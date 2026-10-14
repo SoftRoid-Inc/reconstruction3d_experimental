@@ -170,9 +170,14 @@ def build_manifest(windows, max_seg=None, segments=None, prefix="pv"):
                                        for ca_, cb_ in cuts)]
                     if not use:
                         continue    # 切断域を避けられない小区間は破棄
-                manifest.append({
-                    "tag": f"{prefix}{SESSION}_{fl_name}{sfx}{dsfx}",
-                    "floor": fl, "a": a2, "b": b2, "chunks": use})
+                ent = {"tag": f"{prefix}{SESSION}_{fl_name}{sfx}{dsfx}",
+                       "floor": fl, "a": a2, "b": b2, "chunks": use}
+                if parts > 1:
+                    # 分割サブ島は親を明示する。タグ末尾の数字で判定すると
+                    # IMU区間のタグ (pv<sess>_sNN) を誤ってサブ島扱いしてしまう
+                    # (2026-10-14: 本番で6島中5島がskipされていた)
+                    ent["parent"] = f"{prefix}{SESSION}_{fl_name}{sfx}"
+                manifest.append(ent)
     return manifest
 
 
