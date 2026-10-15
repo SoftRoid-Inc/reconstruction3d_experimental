@@ -172,6 +172,35 @@ def join_eval(a_end, b_start, mode, gt, horiz=(0, 2)):
             ma["tag"], mb["tag"], len(keep))
 
 
+def bridge_transform(a_end, b_start, mode):
+    """島Bゲージ → 島Aゲージ の Sim(3)。(T, タグ対)。失敗時は (None, None)
+
+    橋を鎖状に合成して「群れ」を作るために、位置でなく変換を返す。
+    """
+    from img_align.core.bridge import _chain_poses, fit_side, run_chain_bridge
+    from img_align.core.geometry import compose
+    ma, mb = _islands(a_end, b_start)
+    if ma is None:
+        return None, None
+    ca, cb = _chain_poses(ma["tag"]), _chain_poses(mb["tag"])
+    if mode.startswith("n") and "s" in mode:
+        n, st = (int(v) for v in mode[1:].split("s"))
+        pos, af, bf_ = run_chain_bridge(ma["tag"], mb["tag"], n, st)
+        fa, fb = fit_side(pos, ca, af), fit_side(pos, cb, bf_)
+    else:
+        pos = run_bridge(a_end, b_start, mode)
+        bf = sorted(pos)
+        mid = (a_end + b_start) / 2
+        fa = fit_side(pos, ca, [f for f in bf if f <= mid])
+        fb = fit_side(pos, cb, [f for f in bf if f > mid])
+    if fa is None or fb is None:
+        return None, None
+    sa, Ra, ta, _, _ = fa
+    sb, Rb, tb, _, _ = fb
+    inv = (1.0 / sb, Rb.T, -(Rb.T @ tb) / sb)
+    return compose((sa, Ra, ta), inv), (ma["tag"], mb["tag"])
+
+
 def transported(a_end, b_start, mode):
     """橋で島Bを島Aの座標系へ運んだ位置 (GT不要)。(位置(N,3), タグ対)"""
     from img_align.core.bridge import (_chain_poses, fit_side,
