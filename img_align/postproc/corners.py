@@ -399,6 +399,8 @@ ICP_TOP_K = 32
 # 分岐が複数あり、RANSACの対応付けだけでは正しい分岐が生成されないことがある
 # (2026-10-15実測: 0616_s01m は正解姿勢を入れればスコアで勝てるのに候補に無かった)
 ADD_ROT_BRANCHES = True
+# 候補の順位付けに使うスコア名 (anchor_score.SCORERS のいずれか)
+SCORE_KEY = "f1_feas_scale"
 
 
 # 継続性の許容距離。歩行速度の上限から出すと緩すぎる (直線移動の仮定)ので、
@@ -534,6 +536,8 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
     from img_align.postproc.anchor_score import AnchorScorer
     scorer = AnchorScorer(grid, wall_pts, segs, cam_rc, s_prior=base)
 
+    # 順位付けスコアの名前 (anchor_score.SCORERS)。A/Bはここを差し替える
+    key = SCORE_KEY
     # 順位付けは f1_feas_scale (対称被覆 × カメラ妥当性 × スケール逸脱ペナルティ)。
     # 従来の wall_cover (片方向被覆) は縮小退化のため正解より偽解を好み、
     # 全周島8本で0/8しか当てられなかった (2026-10-13実測)
@@ -546,7 +550,7 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
         v0 = scorer(cnd["s"], cnd["th"], cnd["t"])
         if v0["cam_feas"] < 0.3:     # 明らかに屋外/壁内の解だけ落とす
             continue
-        pre.append((v0["f1_feas_scale"], cnd))
+        pre.append((v0[key], cnd))
     pre.sort(key=lambda x: -x[0])
     print(f"候補 {len(cands)} -> 足切り後 {len(pre)} -> ICP {min(len(pre), ICP_TOP_K)}本")
 
@@ -557,9 +561,9 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
         v = scorer(s2, th2, t2)
         if v["cam_feas"] < 0.3:
             continue
-        scores.append(v["f1_feas_scale"])
-        if best is None or v["f1_feas_scale"] > best[0]:
-            best = (v["f1_feas_scale"], (s2, th2, t2, resid, cnd["n"]), v)
+        scores.append(v[key])
+        if best is None or v[key] > best[0]:
+            best = (v[key], (s2, th2, t2, resid, cnd["n"]), v)
     if best is None:
         raise RuntimeError(f"{tag}: 全候補がカメラ妥当性/連続性で棄却された")
     s2, th2, t2, resid, n_in = best[1]

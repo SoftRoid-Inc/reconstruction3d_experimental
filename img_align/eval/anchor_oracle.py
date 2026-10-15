@@ -28,7 +28,8 @@ from img_align.core.plan_grid import PlanGrid
 from img_align.eval.gt_traj import MM_PER_PX, load_gt
 from img_align.postproc.anchor import prepare_island
 from img_align.postproc.anchor_score import SCORERS, AnchorScorer
-from img_align.postproc.corners import (DENS_THR, density_corners,
+from img_align.postproc.corners import (ADD_ROT_BRANCHES, DENS_THR,
+                                        _rot_branches, density_corners,
                                         match_corners, plan_corners_cell)
 from img_align.postproc.plan_icp import wall_segments_px
 from img_align.postproc.plan_icp import (cells_to_px, icp_to_walls,
@@ -58,6 +59,8 @@ def candidates(tag, floor, s_prior=1.0, mpu=None, s_rel_tol=0.4,
         [(d["cam_pos_aligned"][:, 2] - d["origin"][1]) / d["cell_units"],
          (d["cam_pos_aligned"][:, 0] - d["origin"][0]) / d["cell_units"]],
         axis=1)
+    if ADD_ROT_BRANCHES:     # 本番と同じ候補集合にする
+        cands += _rot_branches(cands, cam_rc)
     zz2, xx2 = np.nonzero(d["density"] > 0.15)
     wall_pts = np.stack([zz2, xx2], axis=1).astype(np.float64)
     wall_pts = wall_pts[:: max(1, len(wall_pts) // 20000)]

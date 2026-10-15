@@ -38,6 +38,13 @@ SCALE_K = 2.0          # scale_dev のペナルティ強度
 # 1乗では寄与が足りず偽解に負ける (2026-10-15実測: 0912_s001 で
 # 正解 f1=0.179/feas=0.94 が 偽解 f1=0.218/feas=0.78 に 0.1% 差で敗れた)
 FEAS_P = 2.0
+# 壁貫通: 連続フレーム間の線分が「開口を除いた壁」を通る割合。
+# カメラは扉・窓でしか壁を越えられないので、180°回転した偽解は壁を突き抜ける。
+# cam_feas が「各フレームが屋内にあるか」なのに対し、これは**フレーム間の移動**を
+# 見るので別の情報 (両端が屋内でも間に壁があれば検出できる)。
+# 実測 (2026-10-15, 0912): 正解姿勢 0.0〜1.8% / 誤った回転 2.7〜20.7%
+CROSS_K = 3.0          # 貫通率のペナルティ強度
+CROSS_SAMPLES = 8      # 1線分あたりのサンプル点数
 
 
 def sample_segments(segs, step=SAMPLE_CELLS):
@@ -65,6 +72,9 @@ class AnchorScorer:
         self.sense = sense
         self.plan_pts = sample_segments(segs)
         self.plan_tree = cKDTree(self.plan_pts)
+        self.solid = getattr(grid, "solid", None)
+        if self.solid is not None:
+            self.solid = self.solid > 0.5
 
     def __call__(self, s, th, t):
         wp = transform_pts(self.wall_pts, s, th, t)
@@ -94,17 +104,34 @@ class AnchorScorer:
         feas = (float(self.grid.valid_pose[pc[ok, 0], pc[ok, 1]].mean()
                       * ok.mean()) if ok.any() else 0.0)
 
+        cross = self._wall_cross(cam)
+
         dev = abs(np.log(max(s, 1e-6) / max(self.s_prior, 1e-6)))
         pen = float(np.exp(-SCALE_K * dev))
+        x_pen = float(np.exp(-CROSS_K * cross))
         return {
             "precision": precision, "recall": recall, "f1": f1,
             "cam_feas": feas, "scale_dev": float(dev),
+            "wall_cross": cross,
             # 比較用の名前付きスコア (eval/anchor_oracle が順位を測る)
             "cover": precision,                  # 従来の基準
             "f1_feas": f1 * feas,
             "f1_feas_scale": f1 * (feas ** FEAS_P) * pen,
+            "f1_feas_scale_cross": f1 * (feas ** FEAS_P) * pen * x_pen,
             "cover_feas": precision * feas,
         }
 
+    def _wall_cross(self, cam):
+        """連続フレーム間の線分が solid (開口を除く壁) を通る割合"""
+        if self.solid is None or len(cam) < 2:
+            return 0.0
+        a, b = cam[:-1], cam[1:]
+        t = np.linspace(0.0, 1.0, CROSS_SAMPLES)[None, :, None]
+        pts = a[:, None, :] + (b - a)[:, None, :] * t
+        rr = np.clip(np.round(pts[:, :, 0]).astype(int), 0, self.solid.shape[0] - 1)
+        cc = np.clip(np.round(pts[:, :, 1]).astype(int), 0, self.solid.shape[1] - 1)
+        return float(self.solid[rr, cc].any(axis=1).mean())
 
-SCORERS = ("cover", "f1", "f1_feas", "f1_feas_scale", "cover_feas")
+
+SCORERS = ("cover", "f1", "f1_feas", "f1_feas_scale",
+           "f1_feas_scale_cross", "cover_feas")
