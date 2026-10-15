@@ -138,12 +138,12 @@ def post_interp(manifest):
 
 def _anchor_one(args):
     """1島をアンカー (プロセス並列のワーカー。例外は文字列で返す)"""
-    tag, floor, session, suffix = args
+    tag, floor, session, suffix, cont = (*args, False)[:5]
     os.environ["IMG_SESSION"] = session      # 子プロセスでconfigを凍結させる
     from img_align.postproc.corners import corner_anchor
     try:
         _, info = corner_anchor(tag, floor, s_prior=1.0, suffix=suffix,
-                                return_info=True)
+                                return_info=True, continuity_ref=cont)
         return tag, None, info.get("score", 0.0)
     except Exception as e:
         return tag, f"{type(e).__name__}: {e}", 0.0
@@ -151,10 +151,12 @@ def _anchor_one(args):
 
 # 2段アンカー: 1段目で全島を独立に解き、2段目はその結果を時系列の基準にして
 # **全島を1本ずつ順に解き直す**。人は連続して歩くので、隣の島から離れすぎた
-# 解は物理的に有り得ない。
-# スコアの絶対値で「信頼できる島」を選ぶ案は失敗した (2026-10-15実測:
-# 最悪島 8.13m の score 0.132 が 成功島 0.64m の 0.027 を上回る)。
-# スコアは島ごとの条件に強く依存し、島間の比較には使えない。
+# 解は物理的に有り得ない…という筋だが、**実測では有害だった** (2026-10-15:
+# 0616が1/3→0/3)。1段目が間違っている島が基準になると、正しかった島まで
+# そこへ引き寄せられる。基準にする島を選別できない限り使えないので既定はOFF。
+# 選別にスコアの絶対値を使う案も失敗済み (最悪島 8.13m の score 0.132 が
+# 成功島 0.64m の 0.027 を上回る。スコアは島ごとの条件に強く依存する)。
+CONTINUITY_STAGE = False
 
 
 def post_anchor(manifest, jobs=None):
@@ -190,7 +192,7 @@ def post_anchor(manifest, jobs=None):
     for tag, err, _ in res1:
         if err:
             print(f"[anchor] {tag}: 解なし ({err})")
-    if len(todo) < 2:
+    if len(todo) < 2 or not CONTINUITY_STAGE:
         return
     # 2段目: 1段目の全島を基準に、**1本ずつ順番に**解き直す。
     # 自分以外のアンカーが基準になるので、相互に拘束し合う。逐次なのは
@@ -199,7 +201,7 @@ def post_anchor(manifest, jobs=None):
     import shutil
     from img_align.config import OUT_DIR
     for t, f, sess in todo:
-        _, err, _ = _anchor_one((t, f, sess, "_cont"))
+        _, err, _ = _anchor_one((t, f, sess, "_cont", True))
         if err:
             print(f"[anchor] {t}: 2段目失敗 ({err}) -> 1段目を維持")
             continue

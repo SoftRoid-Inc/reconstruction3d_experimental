@@ -459,7 +459,7 @@ def _rot_branches(cands, cam_rc):
 
 def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
                   s_prior=None, suffix="_corners", return_info=False,
-                  mpu_source="mapany", sweep=S_SWEEP):
+                  mpu_source="mapany", sweep=S_SWEEP, continuity_ref=False):
     """島をコーナーRANSAC照合でアンカーし、壁ICPで精密化して保存する
 
     ref_tag: スケール事前用の配置済み島 (スラブ推定の比。無ければ事前なし)
@@ -468,6 +468,11 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
     (階段吹き抜けは上下階で同位置のため、階段直後の島はきつく縛れる)
     mpu/s_prior: メトリック出力のフロントエンド (MapAnything条件付け等) は
     mpu=1.0, s_prior≈1.0 を直接指定できる (ref_tag指定時はref優先)
+    continuity_ref: 他島のアンカー結果を時系列の基準に使うか。**既定OFF**。
+    ONにすると `corner_anchor_*.json` の**残っているファイル**を拾うので、
+    並列実行では順序で、再実行では前回の残骸で結果が変わる。
+    精度面でも実測で有害だった (2026-10-15: 0616が1/3→0/3。誤った基準に
+    引きずられて、正しかった島まで寄ってしまう)
     mpu_source: mpu未指定時のスケール事前の供給源 (postproc/scale_prior)。
     既定の床スラブ推定は2〜5倍ずれるため mapany を既定にしている
     sweep: 事前スケールの倍率掃引。Noneで無効 (従来どおり1点のみ)
@@ -507,7 +512,7 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
 
     # 時系列連続性: アンカー済みの隣接島から「この島はここにあるはず」を得る
     frames = [int(str(n).replace("frame_", "")) for n in d["names"]]
-    cont_ref = _nearest_anchored(tag, frames)
+    cont_ref = _nearest_anchored(tag, frames) if continuity_ref else None
     if cont_ref:
         j, xy, kf, gap = cont_ref
         print(f"continuity: f{frames[j]} は既知のf{kf}から{gap}フレーム "

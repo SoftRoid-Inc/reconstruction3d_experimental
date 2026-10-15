@@ -32,6 +32,15 @@ MIN_SEG_FRAMES = 24   # これ未満の訪問区間は島にしない (チャン
 GAP_FRAMES = 12       # 同一階ラベルの小ギャップはつなぐ
 EDGE_SLACK = 8        # 端チャンクの区間外はみ出し許容 (フレーム。端の取りこぼし対策)
 MIN_RESCUE_FRAMES = 12  # 切除後の端切れをミニ島として救済する下限
+# **アンカー可能な最小長**。短い島は図面に対して一意に決まるだけの指紋を
+# 持たない。全5セッションの短島を長さ順に並べると境界がはっきり出る
+# (2026-10-15実測、数字はGT残差):
+#   12/16/16/31f=解なし  20f=4.29  23f=2.18  27f=1.01  32f=5.30  (0/8)
+#   40f=0.15 ✓           41f=5.90                              (1/2)
+# 32と40の間が境目。40ちょうどで成功例があるので**36**で切る
+# (0828の39フレーム区間を残すため。40にすると0.15mの成功島を落とす)。
+# 短い島を作るくらいなら、階段を跨ぐリスクを取って隣と繋いだ方が価値がある
+MIN_ANCHOR_FRAMES = 36
 
 
 def gt_segments():
@@ -123,10 +132,10 @@ def imu_segments(n_frames, use_idle=True):
         cuts = merged
     segs, prev = [], 0
     for a, b in cuts:
-        if a - 1 - prev + 1 >= MIN_RESCUE_FRAMES:
+        if a - 1 - prev + 1 >= MIN_ANCHOR_FRAMES:
             segs.append((None, prev, a - 1))
         prev = b + 1
-    if n_frames - 1 - prev + 1 >= MIN_RESCUE_FRAMES:
+    if n_frames - 1 - prev + 1 >= MIN_ANCHOR_FRAMES:
         segs.append((None, prev, n_frames - 1))
     imu_segments.last_cuts = cuts    # build_manifestのfallbackが切断回避に使う
     return segs
@@ -274,12 +283,21 @@ def stair_resplit(manifest, chunks_dir="chunks",
             out.append(m)
             continue
         ca, cb, ratio, kind = s
+        # 分割するとアンカー不能な断片しか残らないなら、分割しない方がまし
+        halves = [(m["a"], ca - 1), (cb + 1, m["b"])]
+        long_halves = [h for h in halves if h[1] - h[0] + 1 >= MIN_ANCHOR_FRAMES]
+        if not long_halves:
+            print(f"[stair_check] {m['tag']}: 鉛直異常[{kind}] だが両半島とも "
+                  f"{MIN_ANCHOR_FRAMES}f未満 -> 分割せず採用")
+            out.append(m)
+            continue
         print(f"[stair_check] {m['tag']}: 鉛直異常[{kind}] frames {ca}-{cb} "
               f"(変位 {ratio:.2f}×カメラ高) -> 再分割")
         subs = []
         for i, (a2, b2) in enumerate([(m["a"], ca - 1), (cb + 1, m["b"])]):
-            if b2 - a2 + 1 < MIN_RESCUE_FRAMES:
-                print(f"  半島 {a2}-{b2}: 短すぎ -> 破棄")
+            if b2 - a2 + 1 < MIN_ANCHOR_FRAMES:
+                print(f"  半島 {a2}-{b2} ({b2 - a2 + 1}f): "
+                      f"{MIN_ANCHOR_FRAMES}f未満でアンカー不能 -> 破棄")
                 continue
             use = [k for k, (wa, wb) in enumerate(windows)
                    if wa >= a2 and wb <= b2 + 1]
@@ -362,6 +380,15 @@ def stair_remerge(manifest, chunks_dir="chunks",
             if s is not None and s[3] == "excursion":
                 # はしご等の往復: レベルは変わらない -> 偽切断とみなし統合
                 print(f"  往復(excursion, {s[2]:.2f}×) -> 統合 ({tag}: {a}-{b})")
+                s = None
+            short = (m1["b"] - m1["a"] + 1 < MIN_ANCHOR_FRAMES
+                     or m2["b"] - m2["a"] + 1 < MIN_ANCHOR_FRAMES)
+            if s is not None and short:
+                # 片方がアンカー不能な短さなら、階段を跨ぐリスクを取ってでも繋ぐ。
+                # 使えない島が2本残るより、怪しい島が1本ある方が価値がある
+                # (2026-10-15実測: 40フレーム未満の島は0/4で全滅)
+                print(f"  短島あり ({m1['b']-m1['a']+1}f / {m2['b']-m2['a']+1}f) "
+                      f"-> 鉛直異常[{s[3]}]を許容して統合")
                 s = None
             if s is None:
                 print(f"  clean -> 統合 ({tag}: {a}-{b})")
