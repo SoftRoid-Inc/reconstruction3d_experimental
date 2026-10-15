@@ -15,7 +15,8 @@
   recall    : 図面壁 → 島の壁点。ただし**島が到達した範囲の壁だけ**を分母にする
               (島はフロアの一部しか回らないので全体を分母にすると部分島が不当に沈む)
   f1        : 上2つの調和平均。縮小退化を直接潰す (縮めればPは上がるがRが落ちる)
-  cam_feas  : カメラが屋内自由空間に載る割合 (従来は0.5の足切りにしか使っていない)
+  cam_feas  : カメラが屋内自由空間に載る割合 (従来は0.5の足切りにしか使っていない)。
+              **FEAS_P乗して効かせる** — 回転分岐を見分けられるのはこの項だけ
   scale_dev : |log(最終スケール / 事前スケール)|。ICPがどれだけ尺度を動かしたか
 
 使い方:
@@ -32,6 +33,11 @@ CUT_CELLS = 2.0        # 壁に載ったとみなす距離 (セル。1セル=0.0
 SENSE_CELLS = 120.0    # 島が「到達した」とみなすカメラからの距離 (=6m)
 SAMPLE_CELLS = 1.0     # 図面壁線分を点列にする間隔
 SCALE_K = 2.0          # scale_dev のペナルティ強度
+# cam_feas の指数。Manhattan構造の建物では180°回転しても壁の重なり (f1) は
+# ほとんど変わらず、区別できるのは**カメラが屋内に収まるか**だけ。
+# 1乗では寄与が足りず偽解に負ける (2026-10-15実測: 0912_s001 で
+# 正解 f1=0.179/feas=0.94 が 偽解 f1=0.218/feas=0.78 に 0.1% 差で敗れた)
+FEAS_P = 2.0
 
 
 def sample_segments(segs, step=SAMPLE_CELLS):
@@ -96,7 +102,7 @@ class AnchorScorer:
             # 比較用の名前付きスコア (eval/anchor_oracle が順位を測る)
             "cover": precision,                  # 従来の基準
             "f1_feas": f1 * feas,
-            "f1_feas_scale": f1 * feas * pen,
+            "f1_feas_scale": f1 * (feas ** FEAS_P) * pen,
             "cover_feas": precision * feas,
         }
 

@@ -82,17 +82,68 @@ def med_yaw(rots):
 
 
 def lock_rotation(g_rots, cur_rots):
-    """方位ロック: 回転 = 重力整列の一致 + ヨー中央値の一致 で一意に決まる"""
+    """方位ロック: 回転 = 重力整列の一致 + ヨー中央値の一致 で一意に決まる
+
+    「撮影中ヨーは一定」という仮定を置く。FlowStateの実測ヨーが使えるなら
+    `lock_rotation_flowstate` の方が正確 (実測ではヨーは一定でなく±12°動く)。
+    """
     m_g, Rg_g = med_yaw(np.stack(g_rots))
     m_c, Rg_c = med_yaw(cur_rots)
     return Rg_g.T @ rot_y(m_g - m_c) @ Rg_c
 
 
+def _gauge_offset(names, rots, fs_yaw):
+    """このチャンクの「ゲージ ↔ 世界」のヨー差 [rad]。FlowStateの実測ヨーを使う
+
+    ヨーは角度なので複素平均で畳む (±180°の折返しを跨がないため)。
+    """
+    _, Rg = med_yaw(rots)
+    fwd = rots[:, :, 2] @ Rg.T
+    vy = np.arctan2(-fwd[:, 2], fwd[:, 0])
+    fr = np.array([int(str(n).replace("frame_", "")) for n in names])
+    ok = fr < len(fs_yaw)
+    if ok.sum() < 3:
+        return None, Rg
+    d = np.radians(fs_yaw[fr[ok]]) - vy[ok]
+    return float(np.angle(np.exp(1j * d).mean())), Rg
+
+
+def lock_rotation_flowstate(g_rots, g_names, cur_rots, cur_names, fs_yaw):
+    """FlowStateの実測ヨーで連結回転を決める (累積回転を断つ)
+
+    従来の `lock_rotation` は「ヨー一定」を仮定するため、仮定からのずれが
+    連結のたびに積み上がる。2026-10-15の実測では0912の全6島で**同符号の
+    ドリフト** (−9.7〜−27.4°、−1.5〜−3.7°/チャンク) が出ていた。
+    FlowStateは画像側の**絶対基準**なので、各チャンクを独立に世界へ合わせれば
+    累積が原理的に起きない。
+
+    返り値: 回転行列。FlowStateが使えなければ None (呼び出し側が従来版へ)
+    """
+    o_g, Rg_g = _gauge_offset(g_names, np.stack(g_rots), fs_yaw)
+    o_c, Rg_c = _gauge_offset(cur_names, cur_rots, fs_yaw)
+    if o_g is None or o_c is None:
+        return None
+    # 世界ヨーを一致させるのに必要な、重力軸まわりの回転
+    return Rg_g.T @ rot_y(o_c - o_g) @ Rg_c
+
+
 def chain(cdirs, yaw_lock=False):
-    """チャンク列を順に連結し (chunks, 変換列T, ログ) を返す"""
+    """チャンク列を順に連結し (chunks, 変換列T, ログ) を返す
+
+    yaw_lock: False=ICPが回転も解く (既定) / True=ヨー一定を仮定してロック /
+    "flowstate"=FlowStateの実測ヨーでロック (累積回転を断つ。要 imu/flowstate_yaw)
+    """
     chunks = [load_chunk(c) for c in cdirs]
     T = [(1.0, np.eye(3), np.zeros(3))]
     g_rots = list(chunks[0][2][:, :3, :3])   # 連結済みフレームのglobal回転
+    g_names = list(chunks[0][0])
+    fs_yaw = None
+    if yaw_lock == "flowstate":
+        from img_align.imu.flowstate_yaw import load as load_fs
+        fs_yaw = load_fs()
+        if fs_yaw is None:
+            print("[chain] flowstate_yaw.npz が無い -> 従来のヨーロックへ")
+            yaw_lock = True
     log = []
     for k in range(1, len(chunks)):
         n_prev, _, _, pf_prev, _ = chunks[k - 1]
@@ -118,12 +169,18 @@ def chain(cdirs, yaw_lock=False):
             print(f"chunk {k:02d}: few shared ({len(shared)}) -> "
                   f"lock-rotation init + full prev map as ICP target")
         if yaw_lock:
-            R_lock = lock_rotation(g_rots, poses_cur[:, :3, :3])
+            R_lock = None
+            if fs_yaw is not None:
+                R_lock = lock_rotation_flowstate(
+                    g_rots, g_names, poses_cur[:, :3, :3], n_cur, fs_yaw)
+            if R_lock is None:
+                R_lock = lock_rotation(g_rots, poses_cur[:, :3, :3])
             t0 = c_prev_g.mean(axis=0) - T0[0] * R_lock @ c_cur.mean(axis=0)
             T0 = (T0[0], R_lock, t0)
-        Tk, resid = trimmed_icp_sim3(src, dst, T0, fix_R=yaw_lock)
+        Tk, resid = trimmed_icp_sim3(src, dst, T0, fix_R=bool(yaw_lock))
         T.append(Tk)
         g_rots.extend(Tk[1] @ po[:3, :3] for po in poses_cur)
+        g_names.extend(n_cur)
         log.append({"chunk": k, "shared": len(shared),
                     "scale": round(Tk[0], 4), "icp_resid": round(resid, 4)})
         print(f"chunk {k:02d}: shared={len(shared)} scale={Tk[0]:.3f} "
@@ -161,9 +218,67 @@ def load_chunk(cdir):
     return names, cams["positions"], cams["poses"], pf, untrusted
 
 
-def chain_and_save(cdirs, tag, yaw_lock=False):
-    """チャンク列を連結して frontend_bench/<tag>/ に書き出す (mainの本体)"""
+def _sim3_mul(A, B):
+    """相似変換の合成 (Bを適用してからA)"""
+    sa, Ra, ta = A
+    sb, Rb, tb = B
+    return (sa * sb, Ra @ Rb, sa * (Ra @ tb) + ta)
+
+
+def _sim3_inv(T):
+    s, R, t = T
+    return (1.0 / s, R.T, -(R.T @ t) / s)
+
+
+def drift_correct(chunks, T, fs_yaw, min_links=3):
+    """連結で積み上がったヨーの**系統バイアス**だけを除く
+
+    `lock_rotation_flowstate` のようにICPの回転をFlowStateで置き換えると、
+    ICPの方が正確な分まで壊れる (2026-10-15実測: 形状残差 0.21→0.25m 悪化)。
+    そこでICPの相対回転は信じたまま、**1連結あたり一定量のバイアス**
+    (実測で0912の全6島が同符号、−1.5〜−3.7°/チャンク) だけを引く。
+    FlowStateは島全体の傾きを1つ推定するのにしか使わないので、
+    フレーム単位の揺れ (±6°) は平均されて効かない。
+
+    返り値: 補正後の変換列 T'。推定できなければ元の T。
+    """
+    if fs_yaw is None or len(T) < min_links + 1:
+        return T, 0.0
+    # 各チャンクの「ゲージ↔世界」オフセットを、連結後のglobal姿勢で測る
+    xs, ys = [], []
+    for k, (names, _, poses, _, _) in enumerate(chunks):
+        g_rot = np.stack([T[k][1] @ po[:3, :3] for po in poses])
+        o, _ = _gauge_offset(names, g_rot, fs_yaw)
+        if o is not None:
+            xs.append(k)
+            ys.append(o)
+    if len(xs) < min_links:
+        return T, 0.0
+    # 折返しを跨がないよう unwrap してから直線を当てる
+    slope = float(np.polyfit(np.array(xs), np.unwrap(np.array(ys)), 1)[0])
+    if abs(np.degrees(slope)) < 0.3:
+        return T, slope          # バイアスが小さければ触らない
+    # 相対変換を取り出し、回転だけ -slope 補正して積み直す
+    out = [T[0]]
+    for k in range(1, len(T)):
+        rel = _sim3_mul(_sim3_inv(T[k - 1]), T[k])
+        _, Rg = med_yaw(np.stack([T[k - 1][1] @ po[:3, :3]
+                                  for po in chunks[k - 1][2]]))
+        fix = Rg.T @ rot_y(slope) @ Rg
+        out.append(_sim3_mul(out[k - 1], (rel[0], fix @ rel[1], rel[2])))
+    return out, slope
+
+
+def chain_and_save(cdirs, tag, yaw_lock=False, drift_fix=False):
+    """チャンク列を連結して frontend_bench/<tag>/ に書き出す (mainの本体)
+
+    drift_fix: 連結後にヨーの系統バイアスを除く (要 imu/flowstate_yaw)
+    """
     chunks, T, log = chain(cdirs, yaw_lock=yaw_lock)
+    if drift_fix:
+        from img_align.imu.flowstate_yaw import load as load_fs
+        T, sl = drift_correct(chunks, T, load_fs())
+        print(f"[drift_fix] ヨーバイアス {np.degrees(sl):+.2f}°/chunk を除去")
     # グローバル軌跡と点群
     out = BENCH_DIR / tag
     out.mkdir(parents=True, exist_ok=True)

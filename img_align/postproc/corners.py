@@ -395,6 +395,66 @@ TOP_K = 24
 # 全120候補にICPをかけると170秒になるので、**ICP前の素の変換で採点**して
 # 上位だけICPにかける。ICP前後でスコアの順位はほぼ保たれる (eval/anchor_oracle で検証)
 ICP_TOP_K = 32
+# 各候補の90°回転変種も候補に入れる。Manhattan構造では壁の重なりが同じになる
+# 分岐が複数あり、RANSACの対応付けだけでは正しい分岐が生成されないことがある
+# (2026-10-15実測: 0616_s01m は正解姿勢を入れればスコアで勝てるのに候補に無かった)
+ADD_ROT_BRANCHES = True
+
+
+# 継続性の許容距離。歩行速度の上限から出すと緩すぎる (直線移動の仮定)ので、
+# **隣接島の端点間距離をGTで実測**して決めた (2026-10-15、全5セッション25対):
+# m/フレームの中央値 0.04〜0.20、最大 0.38。安全率1.5をかけて 0.57。
+CONT_SPEED = 0.38
+CONT_MARGIN = 1.5
+CONT_MIN_M = 4.0          # 隙間ゼロでもこれだけは許す (島内の端点ずれを吸収)
+
+
+def _cont_bound(gap_frames):
+    """フレーム差から許容距離[m]を決める (人は瞬間移動しない)"""
+    return max(CONT_MIN_M, gap_frames * CONT_SPEED * CONT_MARGIN)
+
+
+def _nearest_anchored(tag, frames, suffix=""):
+    """アンカー済みの他島から、この島に時間的に最も近い基準点を拾う
+
+    返り値 (この島のindex, 基準の図面px, 基準フレーム, フレーム差)。
+    無ければ None。`corner_anchor_<tag>.json` を直接読むので、
+    先に別の島をアンカーしてあれば自動で効く。
+    """
+    from img_align.config import OUT_DIR
+    known = {}
+    for p in OUT_DIR.glob("corner_anchor_*.json"):
+        if p.stem == f"corner_anchor_{tag}":
+            continue
+        try:
+            for n, xy in json.loads(p.read_text()).items():
+                f = int(n.replace("frame_", ""))
+                if f not in frames:
+                    known[f] = tuple(xy)
+        except Exception:
+            continue
+    if not known:
+        return None
+    j = min(range(len(frames)),
+            key=lambda i: min(abs(frames[i] - k) for k in known))
+    kf = min(known, key=lambda k: abs(k - frames[j]))
+    return j, known[kf], kf, abs(kf - frames[j])
+
+
+def _rot_branches(cands, cam_rc):
+    """各候補を島の重心まわりに90/180/270°回した変種 (重心は動かさない)"""
+    c0 = cam_rc.mean(axis=0)
+    out = []
+    for c in cands:
+        for k in (1, 2, 3):
+            th = c["th"] + math.radians(90 * k)
+            R = _rot2(th)
+            # 回転後も元の候補と同じ位置に重心が来るよう t を解き直す
+            center = c["s"] * (_rot2(c["th"]) @ c0) + c["t"]
+            out.append({"s": c["s"], "th": th,
+                        "t": center - c["s"] * (R @ c0),
+                        "pairs": c["pairs"], "n": c["n"], "k": c["k"]})
+    return out
 
 
 def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
@@ -430,6 +490,10 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
         ra = json.loads((OUT_DIR / f"anchor_{ref_tag}.json").read_text())
         s_prior = ra["s"] * ra["m_per_unit"] / d["m_per_unit"]
         print(f"scale prior {s_prior:.3f} (from {ref_tag})")
+    cam_rc = np.stack(
+        [(d["cam_pos_aligned"][:, 2] - d["origin"][1]) / d["cell_units"],
+         (d["cam_pos_aligned"][:, 0] - d["origin"][0]) / d["cell_units"]],
+        axis=1)
     base = s_prior if s_prior else 1.0
     cands = []
     for mult in (sweep or [1.0]):
@@ -438,31 +502,22 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
                                top_k=TOP_K if sweep else 12)
     if not cands:
         raise RuntimeError(f"{tag}: corner match failed")
-    cam_rc = np.stack(
-        [(d["cam_pos_aligned"][:, 2] - d["origin"][1]) / d["cell_units"],
-         (d["cam_pos_aligned"][:, 0] - d["origin"][0]) / d["cell_units"]],
-        axis=1)
+    if ADD_ROT_BRANCHES:
+        cands += _rot_branches(cands, cam_rc)
 
-    # 時系列連続性の参照 (既存の島アンカー軌跡、セッション別ファイル)
-    from img_align.config import SESSION
-    cont_ref = None
-    traj_p = OUT_DIR / ("trajectory.json" if SESSION == "0828"
-                        else f"trajectory_{SESSION}.json")
+    # 時系列連続性: アンカー済みの隣接島から「この島はここにあるはず」を得る
     frames = [int(str(n).replace("frame_", "")) for n in d["names"]]
-    if traj_p.exists():
-        known = {t["frame"]: (t["x_px"], t["y_px"])
-                 for t in json.loads(traj_p.read_text())["track"]
-                 if t["source"] == "island" and t["frame"] not in frames}
-        if known:
-            j = min(range(len(frames)),
-                    key=lambda i: min(abs(frames[i] - k) for k in known))
-            k_near = min(known, key=lambda k: abs(k - frames[j]))
-            cont_ref = (j, known[k_near], k_near)
+    cont_ref = _nearest_anchored(tag, frames)
+    if cont_ref:
+        j, xy, kf, gap = cont_ref
+        print(f"continuity: f{frames[j]} は既知のf{kf}から{gap}フレーム "
+              f"(許容 {_cont_bound(gap):.1f}m)")
 
     def continuity(s_, th_, t_):
+        """参照フレームとの距離[m]。人は連続して歩くので離れすぎた解は偽"""
         if cont_ref is None:
             return 0.0
-        j, xy, _ = cont_ref
+        j, xy, _, _ = cont_ref
         px = cells_to_px(transform_pts(cam_rc[j][None], s_, th_, t_), grid)[0]
         from img_align.eval.gt_traj import MM_PER_PX
         return math.dist(px, xy) * MM_PER_PX / 1000
@@ -481,7 +536,7 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
     pre = []
     for cnd in cands:
         cont = continuity(cnd["s"], cnd["th"], cnd["t"])
-        if cont_ref is not None and cont > cont_max_m:
+        if cont_ref is not None and cont > _cont_bound(cont_ref[3]):
             continue
         v0 = scorer(cnd["s"], cnd["th"], cnd["t"])
         if v0["cam_feas"] < 0.3:     # 明らかに屋外/壁内の解だけ落とす
