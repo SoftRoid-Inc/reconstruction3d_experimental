@@ -29,6 +29,14 @@ from img_align.core.geometry import rotation_to_y
 from img_align.eval.frontend import fit2d
 from img_align.eval.gt_traj import MM_PER_PX, load_gt
 
+# 壁注釈の無い物件 (ext/) は mm/px が出ない。その場合は**図面幅で正規化**した
+# 単位で診断する (比率や形は単位に依らないので診断の価値は変わらない)
+def _scale():
+    if MM_PER_PX:
+        return MM_PER_PX / 1000, "m"
+    from img_align.config import PROP
+    return 1.0 / PROP.drawing_wh[0], "図面幅"
+
 WIN = 10          # 局所スケール/方位を測る窓 (フレーム)
 
 
@@ -46,8 +54,8 @@ def load_fit(tag, gt):
     for i, f in enumerate(fr):
         g = min(gt, key=lambda k: abs(k - f))
         if abs(g - f) <= 3:
-            gxy.append([gt[g]["x_px"] * MM_PER_PX / 1000,
-                        gt[g]["y_px"] * MM_PER_PX / 1000])
+            gxy.append([gt[g]["x_px"] * _scale()[0],
+                        gt[g]["y_px"] * _scale()[0]])
             used.append(i)
     gxy = np.array(gxy)
     best = None

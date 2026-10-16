@@ -30,6 +30,18 @@ from img_align.core.bridge import (bridge_transform, consensus,  # noqa: F401
                                    manifest_islands, run_bridge, transported)
 from img_align.eval.gt_traj import MM_PER_PX, load_gt
 
+# 壁注釈の無い物件 (ext/) は mm/px が出ないので、誤差は**図面幅で正規化**して
+# 返す (このデータセット本来の単位)。既存物件換算で 0.01 ≈ 0.30m
+_M = (MM_PER_PX / 1000) if MM_PER_PX else None
+
+
+def _unit():
+    """px -> 表示単位の係数と単位名"""
+    from img_align.config import PROP
+    if _M:
+        return _M, "m"
+    return 1.0 / PROP.drawing_wh[0], "図面幅"
+
 
 def _sim2_fit(src, dst, refl=None):
     """2D相似フィット。返り値 (残差中央値[px], 変換後, 変換(k, cs, cd, refl))
@@ -80,7 +92,7 @@ def evaluate(a_end, b_start, mode, gt, horiz=(0, 2)):
     refl = Tall[3]
     r_a, _, Ta = _sim2_fit(src[ia], dst[ia], refl=refl)
     r_b, _, Tb = _sim2_fit(src[ib], dst[ib], refl=refl)
-    m = MM_PER_PX / 1000
+    m = _unit()[0]
     # **運ぶ誤差**: A側を正しく合わせた変換でB側を運んだときのGTとのずれ。
     # 「島Aが正しく図面に乗っているとき、橋で運んだ島Bがどれだけずれるか」
     # = パイプラインで実際に効く量。全体フィットは両側に誤差を分配するので
@@ -156,7 +168,7 @@ def join_eval(a_end, b_start, mode, gt, horiz=(0, 2)):
                           np.stack([[gt[frames[i]]["x_px"],
                                      gt[frames[i]]["y_px"]] for i in nb_k]),
                           refl=refl)
-    m = MM_PER_PX / 1000
+    m = _unit()[0]
     return (r_join * m, (r_a or 0) * m, (r_b or 0) * m, resid_a, resid_b,
             ma["tag"], mb["tag"], len(keep))
 
@@ -179,8 +191,7 @@ def main():
         # グループ化が実際に見る切れ目 = **島の隣接ペア**。IMU区間の切れ目だけ
         # 見ると --max-seg の分割 (連続フレームの人為的な分割) が漏れる。
         # 分割は視覚的な重なりがあるので、橋の難易度の対照群になる
-        from img_align.eval.bridge_view import _manifest_islands
-        man = _manifestislands_at()
+        man = manifest_islands()
         js = [(A["b"], B["a"]) for A, B in zip(man, man[1:])]
     else:
         js = junctions()

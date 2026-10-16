@@ -5,3 +5,6 @@ __pycache__/
 recon3d/output/
 .pytest_cache/
 img_align_backup_latest.tgz
+# 外部テストデータセット (polish-pipeline sfm_testdataset)。実体は
+# /home/maren/temp/recon3d_ext (/mnt/data が逼迫するため別パーティション)
+/ext

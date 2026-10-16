@@ -73,8 +73,11 @@ def _floor_names(gdir, rows):
 def session_meta(session=None):
     """セッション(MMDD) -> {'traj': trajectory_id集合, 'floors': [(a,b,name)]}
     trajectory_data_by_scan_data_id.csv + floor_info.csv から導出"""
-    from img_align.config import SESSION
+    from img_align.config import PROP, PROPERTY, SESSION
     session = session or SESSION
+    # 外部データセットは撮影日とセッション名が一致しないので gt_session を見る
+    prop = PROPERTY.get(session, PROP)
+    key = getattr(prop, "gt_session", None) or session
     gdir = gt_dir(session)
     rows = list(csv.DictReader(
         open(gdir / "trajectory_data_by_scan_data_id.csv")))
@@ -91,9 +94,10 @@ def session_meta(session=None):
                floor_names[r["floor_id"]])
         if rng not in m["floors"]:
             m["floors"].append(rng)
-    if session not in meta:
-        raise KeyError(f"session {session} not in metadata ({list(meta)})")
-    return meta[session]
+    if key not in meta:
+        raise KeyError(f"session {session} (key {key}) not in metadata "
+                       f"({list(meta)})")
+    return meta[key]
 
 
 def load_gt(session=None):

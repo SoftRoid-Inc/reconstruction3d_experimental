@@ -242,8 +242,13 @@ def transported(a_end, b_start, mode):
     return apply((sa, Ra, ta), apply(inv, kb)), (ma["tag"], mb["tag"])
 
 
-def consensus(a_end, b_start, modes):
-    """方式間で運び先がどれだけ一致するか [m]。GTを使わない採否判定の候補
+def consensus(a_end, b_start, modes, metric=True):
+    """方式間で運び先がどれだけ一致するか。GTを使わない採否判定の候補
+
+    **metric=True でメートルに正規化する**。島ゲージの尺度は物件で大きく違い
+    (実測: 28-BBBBBが0.45〜0.49 m/unit に対し外部データは1.23〜1.60)、
+    生の単位でしきい値を置くと**物件をまたいだ瞬間に意味が変わる**
+    (2.5単位が1.2mにも4.0mにもなる)。
 
     橋の残差 (両側チェーンへのフィット) は**当てにならない** (2026-10-15実測:
     残差0.128/0.032で結合誤差4.30m)。橋が「両側には合うが相対関係が誤り」
@@ -262,7 +267,16 @@ def consensus(a_end, b_start, modes):
         for j in range(i + 1, len(outs)):
             d.append(np.median(np.linalg.norm(outs[i][:n] - outs[j][:n],
                                               axis=1)))
-    return float(np.median(d))
+    v = float(np.median(d))
+    if metric:
+        ma, _ = islands_at(a_end, b_start)
+        if ma is not None:
+            from img_align.postproc.scale_prior import m_per_unit
+            try:
+                v *= m_per_unit(ma["tag"])[0]
+            except Exception:
+                pass
+    return v
 
 
 

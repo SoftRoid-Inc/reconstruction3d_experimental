@@ -17,6 +17,7 @@ SESSION = os.environ.get("IMG_SESSION", "0828")
 _28_11177 = PROJECT_ROOT / "28-AAAAA"
 _28_19176 = PROJECT_ROOT / "28-CCCCC"
 _28_41237 = PROJECT_ROOT / "28-BBBBB"
+_EXT = PROJECT_ROOT / "ext"       # 外部テストデータセット (polish-pipeline sfm_testdataset)
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,9 @@ class Property:
     # 階でスパンが違う物件 (セットバック等) は {"1F": mm, ...} の辞書で指定
     known_width_mm: object
     mm_per_px: Optional[float]  # 実測スケール (Noneなら zumen GT から遅延導出)
+    # GT CSV 内でこのセッションを指す MMDD キー。外部データセット (ext/) は
+    # セッション名と撮影日が一致しないので明示する
+    gt_session: Optional[str] = None
     person_mask_dir: Optional[Path] = None  # 既存人物マスク (白=有効/黒=人物)。無ければ seg_ade20k
     colmap_model: Optional[Path] = None     # COLMAP sparse モデル (colmap_prior用)
     drawing_wh: Tuple[int, int] = (2480, 1753)  # 図面画像サイズ
@@ -68,6 +72,18 @@ PROPERTY = {
                      colmap_model=_28_41237 / "0616" / "sfm"
                      / "colmap_coarse" / "0"),
 }
+
+# --- 外部テストデータセット (polish-pipeline の sfm_testdataset、240件中のINSTA)
+# 図面の壁アノテーション (labelme) が無いので**図面アンカーは動かない**。
+# GT軌跡だけで測れるもの (島の形状品質・橋渡しの接続精度) の検証に使う。
+# gt_session は撮影日 (MMDD) で、セッション名とは別物
+for _n, _sess in (("e12343", "0518"), ("e11196", "0518")):
+    _d = _EXT / ("sfm" + _n[1:])
+    PROPERTY[_n] = Property(root=_d, frames_dir=_d / "images",
+                            zumen_dir=_d / "zumen",
+                            known_width_mm=None, mm_per_px=None,
+                            person_mask_dir=_d / "masks",
+                            gt_session=_sess)
 # 28-BBBBB の追加撮影日は構成が同一なのでまとめて登録
 for _d in ("0715", "0912", "0925"):
     PROPERTY[_d] = Property(root=_28_41237,
@@ -113,6 +129,13 @@ SESSION_CFG = {
              "ascend": (252, 280), "descend": (728, 756)},
     "0925": {"frames": range(0, 1378), "ascend": (0, 0), "descend": (0, 0)},
 }
+# 外部データセット (ext/) は階段区間の手動注釈を持たない。フレーム数は画像から
+# 数え、階段区間は空にする (島の切り方はGTの階ラベルから決めるので要らない)
+if SESSION not in SESSION_CFG and SESSION in PROPERTY:
+    _fd = PROPERTY[SESSION].frames_dir
+    _n = len(list(_fd.glob("frame_number_*.jpg"))) if _fd.exists() else 0
+    SESSION_CFG[SESSION] = {"frames": range(0, _n),
+                            "ascend": (0, 0), "descend": (0, 0)}
 CFG = SESSION_CFG[SESSION]
 STAIR_ASCEND = CFG["ascend"]    # 1F→2F
 STAIR_DESCEND = CFG["descend"]  # 2F→1F

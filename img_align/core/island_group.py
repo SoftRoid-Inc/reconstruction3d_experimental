@@ -34,9 +34,12 @@ from img_align.core.bridge import (bridge_transform, consensus, junction_kind,
 from img_align.core.geometry import apply, compose
 from img_align.core.io_ply import read_ply_xyzrgb, write_ply
 
-CONSENSUS_OK_M = 2.5    # 一致度がこれ未満の切れ目だけ繋ぐ
-                        # (実測: 1m未満→最悪0.33m、3m超→1箇所も成功しない。
-                        #  2.5mは「可」まで拾う設定)
+CONSENSUS_OK_M = 1.2    # 一致度[m]がこれ未満の切れ目だけ繋ぐ
+                        # 一致度は **m_per_unit でメートルに正規化済み**
+                        # (島ゲージ単位のままだと物件で尺度が3倍違い、同じ
+                        #  しきい値が1.2m〜4.0mに化ける。2026-10-16に外部
+                        #  データセットで発覚)。旧値2.5は 28-BBBBB の尺度
+                        #  0.49 m/unit 換算で約1.2m だったので同値に揃えた
 MODES = ("n8s1", "n8s2", "n8s4")   # 一致度を測る方式。先頭が採用する変換
 MAX_PLY_POINTS = 4_000_000         # 点群出力の上限 (ディスク逼迫のため必須)
 GROUP_PREFIX = "grp"
