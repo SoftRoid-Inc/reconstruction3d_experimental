@@ -54,9 +54,15 @@ def bin_profile(pts, cam_y, mpu, cell_m=0.05, bin_m=0.20):
     out = []
     for b, occ in sorted(occs.items()):
         union = (occ | consensus).sum()
+        inter = (occ & consensus).sum()
         out.append({"bin": b, "h_m": -(b + 0.5) * bin_m,
                     "n": int((iy == b).sum()),
-                    "iou": float((occ & consensus).sum() / max(union, 1))})
+                    "cells": int(occ.sum()),
+                    "iou": float(inter / max(union, 1)),
+                    # precision = このスライスの占有のうち鉛直に伸びている割合。
+                    # IoUと違い**面積の大きさに報酬が出ない**ので、点が疎でも
+                    # 中身が壁なら高く出る (天井側が不当に沈まない)
+                    "prec": float(inter / max(occ.sum(), 1))})
     return out
 
 
