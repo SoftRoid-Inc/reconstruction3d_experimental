@@ -39,6 +39,17 @@ from img_align.config import (CAM_HEIGHT_M, CFG, OUT_DIR, SESSION,
 CELL_M = 0.05
 Y_BIN_M = 0.20
 MIN_Y_BINS = 4
+# **壁の高さ帯**: カメラ高さ ±WALL_BAND_M だけを密度地図の素材にする。
+# 完成物件ではソファ・カウンター・棚が密度を占めて図面の壁と一致せず、
+# 偽解の方が被覆(f1)で勝ってしまう (2026-10-16 `eval/anchor_blame`:
+# 0925の失敗島5本中4本で 正解f1 < 偽解f1、比2.7〜5.1倍)。
+# カメラは約1.4mなので ±0.7m = 床上0.7〜2.1m。家具の天面(〜1.1m)と
+# 天井設備を外し、**壁だけ**が残る (ユーザーがビューアで確認)。
+# "auto" = 島ごとに実測する (postproc/density_band)。壁は鉛直なので真上から見た
+# 形が高さによらず同じ、という性質だけで決まる。床/天井の検出に依存しないので
+# 床の点群が欠けた島 (0925_s003r2) でも測れる。
+# 数値を入れるとカメラ高さ±その値の対称帯、None で無効 (従来どおり全高)
+WALL_BAND_M = 0.7
 SLAB_MARGIN_M = 0.20
 
 # 既定 = yaw_fix済みチャンク(方位ロックでフレーム回転修復)の連結島
@@ -91,10 +102,19 @@ def prepare_island(tag, mpu=None):
     extras = {"R_align": R, "floor_y_units": floor_y,
               "floor_phys_y_units": floor_phys_y}
 
-    # スラブ除去 + 空間バウンディング + 高さスパン密度
+    # スラブ除去 + (任意で壁の高さ帯) + 空間バウンディング + 高さスパン密度
     keep = np.ones(len(pts), bool)
     for p in peaks:
         keep &= np.abs(pts[:, 1] - p) > SLAB_MARGIN_M / mpu
+    if WALL_BAND_M:
+        from img_align.postproc.density_band import band_mask
+        band, (blo, bhi) = band_mask(pts[keep], cam_y, mpu, WALL_BAND_M)
+        full = np.zeros(len(pts), bool)
+        full[np.flatnonzero(keep)[band]] = True
+        print(f"  wall band {blo:+.2f}〜{bhi:+.2f}m (カメラ基準): "
+              f"{band.mean():.1%} の点を採用")
+        keep = full
+        extras["wall_band_m"] = [blo, bhi]
     w = pts[keep]
     lo_x, hi_x = np.percentile(w[:, 0], [2.5, 97.5])
     lo_z, hi_z = np.percentile(w[:, 2], [2.5, 97.5])

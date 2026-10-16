@@ -108,7 +108,21 @@ def main():
     ap.add_argument("--manifest", default="pv_manifest.json")
     ap.add_argument("--islands", nargs="*", default=None)
     ap.add_argument("--key", default="f1_feas_scale", help="合成スコア名")
+    ap.add_argument("--wall-band", type=float, default=None,
+                    help="カメラ高さ±この値[m]だけを密度の素材にする "
+                         "(家具と天井設備を外して壁だけ残す)")
+    ap.add_argument("--min-y-bins", type=int, default=None,
+                    help="密度地図の壁判定: 何個の高さビンに跨れば壁か "
+                         "(既定4 = 0.8m。家具もこれを超えるので上げると壁選択的)")
     args = ap.parse_args()
+    import img_align.postproc.anchor as _a
+    if args.wall_band:
+        _a.WALL_BAND_M = args.wall_band
+        print(f"[density] WALL_BAND_M=±{args.wall_band}m")
+    if args.min_y_bins:
+        _a.MIN_Y_BINS = args.min_y_bins
+        print(f"[density] MIN_Y_BINS={args.min_y_bins} "
+              f"(鉛直 {args.min_y_bins * 0.20:.1f}m 以上を壁とみなす)")
     gt = load_gt()
     from img_align.core.floor_assign import apply as apply_floor
     man = apply_floor(json.loads(
