@@ -25,7 +25,9 @@ import argparse
 
 import numpy as np
 
-from img_align.core.bridge import bridge_frames, junctions, run_bridge
+from img_align.core.bridge import (bridge_transform, consensus,  # noqa: F401
+                                   islands_at, junction_kind, junctions,
+                                   manifest_islands, run_bridge, transported)
 from img_align.eval.gt_traj import MM_PER_PX, load_gt
 
 
@@ -93,19 +95,6 @@ def evaluate(a_end, b_start, mode, gt, horiz=(0, 2)):
             len(frames), len(ia), len(ib))
 
 
-def _islands(a_end, b_start):
-    """切れ目の両側の島タグ (A側=終端が a_end 寄り / B側=始端が b_start 寄り)"""
-    import json
-    from img_align.config import BENCH_DIR
-    from img_align.core.floor_assign import apply as apply_floor
-    man = apply_floor(json.loads(
-        (BENCH_DIR / "pv_manifest.json").read_text()), quiet=True)
-    a = [m for m in man if m["b"] <= a_end + 2]
-    b = [m for m in man if m["a"] >= b_start - 2]
-    if not a or not b:
-        return None, None
-    return max(a, key=lambda m: m["b"]), min(b, key=lambda m: m["a"])
-
 
 def join_eval(a_end, b_start, mode, gt, horiz=(0, 2)):
     """橋で島Bを島Aの座標系へ移し、結合軌跡をGTと比べる (本命の評価)
@@ -115,7 +104,7 @@ def join_eval(a_end, b_start, mode, gt, horiz=(0, 2)):
     from img_align.core.bridge import (_chain_poses, fit_side,
                                        run_chain_bridge)
     from img_align.core.geometry import apply as apply3
-    ma, mb = _islands(a_end, b_start)
+    ma, mb = islands_at(a_end, b_start)
     if ma is None:
         return None
     ca, cb = _chain_poses(ma["tag"]), _chain_poses(mb["tag"])
@@ -172,110 +161,6 @@ def join_eval(a_end, b_start, mode, gt, horiz=(0, 2)):
             ma["tag"], mb["tag"], len(keep))
 
 
-def bridge_transform(a_end, b_start, mode):
-    """島Bゲージ → 島Aゲージ の Sim(3)。(T, タグ対)。失敗時は (None, None)
-
-    橋を鎖状に合成して「群れ」を作るために、位置でなく変換を返す。
-    """
-    from img_align.core.bridge import _chain_poses, fit_side, run_chain_bridge
-    from img_align.core.geometry import compose
-    ma, mb = _islands(a_end, b_start)
-    if ma is None:
-        return None, None
-    ca, cb = _chain_poses(ma["tag"]), _chain_poses(mb["tag"])
-    if mode.startswith("n") and "s" in mode:
-        n, st = (int(v) for v in mode[1:].split("s"))
-        pos, af, bf_ = run_chain_bridge(ma["tag"], mb["tag"], n, st)
-        fa, fb = fit_side(pos, ca, af), fit_side(pos, cb, bf_)
-    else:
-        pos = run_bridge(a_end, b_start, mode)
-        bf = sorted(pos)
-        mid = (a_end + b_start) / 2
-        fa = fit_side(pos, ca, [f for f in bf if f <= mid])
-        fb = fit_side(pos, cb, [f for f in bf if f > mid])
-    if fa is None or fb is None:
-        return None, None
-    sa, Ra, ta, _, _ = fa
-    sb, Rb, tb, _, _ = fb
-    inv = (1.0 / sb, Rb.T, -(Rb.T @ tb) / sb)
-    return compose((sa, Ra, ta), inv), (ma["tag"], mb["tag"])
-
-
-def transported(a_end, b_start, mode):
-    """橋で島Bを島Aの座標系へ運んだ位置 (GT不要)。(位置(N,3), タグ対)"""
-    from img_align.core.bridge import (_chain_poses, fit_side,
-                                       run_chain_bridge)
-    from img_align.core.geometry import apply as apply3
-    ma, mb = _islands(a_end, b_start)
-    if ma is None:
-        return None, None
-    ca, cb = _chain_poses(ma["tag"]), _chain_poses(mb["tag"])
-    if mode.startswith("n") and "s" in mode:
-        n, st = (int(v) for v in mode[1:].split("s"))
-        pos, af, bf_ = run_chain_bridge(ma["tag"], mb["tag"], n, st)
-        fa, fb = fit_side(pos, ca, af), fit_side(pos, cb, bf_)
-    else:
-        pos = run_bridge(a_end, b_start, mode)
-        bf = sorted(pos)
-        mid = (a_end + b_start) / 2
-        fa = fit_side(pos, ca, [f for f in bf if f <= mid])
-        fb = fit_side(pos, cb, [f for f in bf if f > mid])
-    if fa is None or fb is None:
-        return None, None
-    sa, Ra, ta, _, _ = fa
-    sb, Rb, tb, _, _ = fb
-    kb = np.stack([cb[f] for f in sorted(cb)])
-    inv = (1.0 / sb, Rb.T, -(Rb.T @ tb) / sb)
-    return apply3((sa, Ra, ta), apply3(inv, kb)), (ma["tag"], mb["tag"])
-
-
-def consensus(a_end, b_start, modes):
-    """方式間で運び先がどれだけ一致するか [m]。GTを使わない採否判定の候補
-
-    橋の残差 (両側チェーンへのフィット) は**当てにならない** (2026-10-15実測:
-    残差0.128/0.032で結合誤差4.30m)。橋が「両側には合うが相対関係が誤り」
-    の状態を残差は検出できないため。一致度なら別の情報になりうる。
-    """
-    outs = []
-    for m in modes:
-        t, tags = transported(a_end, b_start, m)
-        if t is not None:
-            outs.append(t)
-    if len(outs) < 2:
-        return None
-    n = min(len(o) for o in outs)
-    d = []
-    for i in range(len(outs)):
-        for j in range(i + 1, len(outs)):
-            d.append(np.median(np.linalg.norm(outs[i][:n] - outs[j][:n],
-                                              axis=1)))
-    return float(np.median(d))
-
-
-def junction_kind(a_end, b_start):
-    """切れ目の種類を返す ("階段" / "静止" / "分割" / "不明")
-
-    島は①IMUの階段イベント ②静止 (ZUPT) ③--max-seg の等分割 で切れる。
-    ③は**連続したフレームの人為的な分割**なので視覚的な重なりがあり、
-    ①②とは橋の難易度が本質的に違う。混ぜて集計すると傾向が見えない。
-    """
-    import json
-    from img_align.config import IMU_DIR
-    gap = b_start - a_end - 1
-    if gap <= 1:
-        return "分割"
-    tr = IMU_DIR / "transitions.json"
-    if tr.exists():
-        for e in json.loads(tr.read_text())["events"]:
-            if int(e["frame_start"]) <= b_start and int(e["frame_end"]) >= a_end:
-                return "階段"
-    il = IMU_DIR / "idle_spans.json"
-    if il.exists():
-        for sp in json.loads(il.read_text())["spans"]:
-            if int(sp["frame_start"]) <= b_start and \
-                    int(sp["frame_end"]) >= a_end:
-                return "静止"
-    return "不明"
 
 
 def main():
@@ -295,7 +180,7 @@ def main():
         # 見ると --max-seg の分割 (連続フレームの人為的な分割) が漏れる。
         # 分割は視覚的な重なりがあるので、橋の難易度の対照群になる
         from img_align.eval.bridge_view import _manifest_islands
-        man = _manifest_islands()
+        man = _manifestislands_at()
         js = [(A["b"], B["a"]) for A, B in zip(man, man[1:])]
     else:
         js = junctions()
@@ -313,7 +198,7 @@ def main():
             except Exception as e:
                 print(f"{a:5d}->{b:<5d}  失敗 ({type(e).__name__}: {e})")
                 continue
-            ma, mb = _islands(a, b)
+            ma, mb = islands_at(a, b)
             fl = (f"{ma['floor']}->{mb['floor']}" if ma is not None else "?")
             same = ("同一" if ma is not None and ma["floor"] == mb["floor"]
                     else "またぎ")

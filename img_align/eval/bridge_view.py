@@ -20,10 +20,10 @@ import numpy as np
 from PIL import Image
 
 from img_align.config import OUT_DIR, PROP, SESSION
-from img_align.core.bridge import junctions
-from img_align.eval.bridge_eval import (_apply2, _islands, _sim2_fit,
-                                        bridge_transform, consensus,
-                                        transported)
+from img_align.core.bridge import (bridge_transform, consensus, islands_at,
+                                   junctions, manifest_islands, transported)
+from img_align.core.island_group import CONSENSUS_OK_M, build_groups
+from img_align.eval.bridge_eval import _apply2, _sim2_fit
 from img_align.eval.gt_traj import MM_PER_PX, load_gt
 
 PAD_PX = 140
@@ -49,7 +49,7 @@ def draw(a_end, b_start, mode, gt, horiz=(0, 2)):
     import matplotlib.pyplot as plt
     matplotlib.rcParams["font.family"] = ["Noto Sans CJK JP", "DejaVu Sans"]
 
-    ma, mb = _islands(a_end, b_start)
+    ma, mb = islands_at(a_end, b_start)
     if ma is None:
         return None
     tb_pos, _ = transported(a_end, b_start, mode)
@@ -104,45 +104,6 @@ def draw(a_end, b_start, mode, gt, horiz=(0, 2)):
     plt.close(fig)
     return out, err
 
-
-CONSENSUS_OK_M = 2.5   # これ未満の切れ目だけ繋ぐ (実測: 1m未満→最悪0.33m、
-                       # 3m超→1箇所も成功しない。2.5mは「可」まで拾う設定)
-
-
-def _manifest_islands():
-    import json
-    from img_align.config import BENCH_DIR
-    from img_align.core.floor_assign import apply as apply_floor
-    man = apply_floor(json.loads(
-        (BENCH_DIR / "pv_manifest.json").read_text()), quiet=True)
-    return sorted([m for m in man if m.get("floor")], key=lambda m: m["a"])
-
-
-def build_groups(modes, thresh=CONSENSUS_OK_M):
-    """橋で繋がる島を「群れ」にまとめる。[(群れ, {tag: 根ゲージへの変換})]
-
-    採否は**方式間の一致度**で決める。橋の残差は当てにならない
-    (残差0.003で0.16m、0.128で4.30m)。
-    """
-    from img_align.core.geometry import compose
-    man = _manifest_islands()
-    groups, cur, T = [], [man[0]], {man[0]["tag"]: (1.0, np.eye(3),
-                                                    np.zeros(3))}
-    for A, B in zip(man, man[1:]):
-        c = consensus(A["b"], B["a"], modes)
-        Tba, _ = bridge_transform(A["b"], B["a"], modes[0])
-        ok = c is not None and c < thresh and Tba is not None
-        print(f"  切れ目 {A['tag']} -> {B['tag']}: 一致度 "
-              + (f"{c:.2f}m" if c is not None else "測定不能")
-              + ("  -> 繋ぐ" if ok else "  -> 切る"))
-        if ok:
-            T[B["tag"]] = compose(T[A["tag"]], Tba)
-            cur.append(B)
-        else:
-            groups.append((cur, T))
-            cur, T = [B], {B["tag"]: (1.0, np.eye(3), np.zeros(3))}
-    groups.append((cur, T))
-    return groups
 
 
 def draw_floors(gt, modes, thresh=CONSENSUS_OK_M, horiz=(0, 2)):

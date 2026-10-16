@@ -210,6 +210,24 @@ def post_anchor(manifest, jobs=None):
             shutil.copy(str(src), str(OUT_DIR / f"anchor_{t}_corners.json"))
 
 
+def post_bridge(args):
+    """橋渡しで島を群れにまとめ、結合チェーンを書いてマニフェストを返す
+
+    以降の anchor / export / viewer はこの群れマニフェストを食う。島を長く
+    するのが狙い (律速は候補生成なので、指紋が増えるほど当たりやすい)。
+    """
+    from img_align.core.island_group import MODES, build_groups, group_manifest
+    groups = build_groups(list(args.bridge_modes or MODES),
+                          args.bridge_thresh, args.skip_cross_floor)
+    print(f"[bridge] {len(groups)}群れ " +
+          " / ".join(f"{len(g)}島" for g, _ in groups))
+    man = group_manifest(groups)
+    from img_align.config import BENCH_DIR
+    (BENCH_DIR / "pv_group_manifest.json").write_text(
+        json.dumps(man, ensure_ascii=False, indent=1))
+    return man
+
+
 def post_hier(manifest):
     from img_align.config import OUT_DIR
     from img_align.postproc.hier_anchor import hier_anchor
@@ -250,7 +268,8 @@ def post_export_viewer(args, manifest, do_viewer):
         viz(f"_{SESSION}_auto")
 
 
-POSTS = ("yaw_fix", "mapany", "interp", "anchor", "hier", "export", "viewer")
+POSTS = ("yaw_fix", "mapany", "interp", "bridge", "anchor", "hier", "export",
+         "viewer")
 
 
 def main():
@@ -310,6 +329,9 @@ def main():
             post_mapany(args, manifest)
         elif p == "interp":
             post_interp(manifest)
+        elif p == "bridge":
+            # 以降のpostは**群れ**を対象にする (島単独ではなく)
+            manifest = post_bridge(args)
         elif p == "anchor":
             post_anchor(manifest, jobs=args.jobs)
         elif p == "hier":

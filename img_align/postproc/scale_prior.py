@@ -22,10 +22,25 @@
   1回目: mapany事前でアンカー → 各島の s を読む
   2回目: 島自身の s で補正した事前で打ち直す (失敗した島はセッション中央値を使う)
 
+## セッション内の外れ値抑制 (2026-10-16追加)
+m_per_unit は**同一セッションではほぼ一定であるべき** (同じカメラ・同じ推論
+設定なので)。0828は4島とも0.492〜0.510 = ±2%に収まる。ところが0925は
+0.396〜1.430 と**3.6倍**も散っていた。原因は `mapany` の共有フレーム不足で
+3島が `slab` にフォールバックしていたこと (slabは0912実測で誤差97〜383%)。
+
+これがアンカーを直接殺す。スケール罰は exp(-2·|log(s/s_prior)|) なので、
+事前が2.4倍ずれた島では正解のスコアが**16分の1**に潰れる
+(2026-10-16 `eval/anchor_blame`: 0925_s005r2 の正解 scale_dev=1.376、
+正解は候補の順位57位に沈み8.24mの偽解が採用された)。
+
+→ `m_per_unit` はセッション全島の**中央値から OUTLIER_TOL 倍を超えて外れた
+値を中央値で置き換える**。物理的にあり得ないばらつきなので、個別の推定より
+セッション中央値の方が信頼できる。
+
 使い方:
   from img_align.postproc.scale_prior import m_per_unit, calibrate
   calibrate(tags)                       # アンカー結果から scale_bias.json を書く
-  mpu, info = m_per_unit("pv0912_1F")   # 較正があれば自動適用
+  mpu, info = m_per_unit("pv0912_1F")   # 較正+外れ値抑制を自動適用
 """
 import json
 
@@ -165,7 +180,50 @@ def _calib(out_name=CALIB_NAME):
     return json.loads(p.read_text()) if p.exists() else None
 
 
-def m_per_unit(tag, source="mapany", fallback="slab", use_calib=True):
+OUTLIER_TOL = 1.5      # セッション中央値のこの倍率を超えたら外れ値とみなす
+                       # (0925実測: 健全な島は中央比0.87〜1.36、壊れた島は
+                       #  2.20〜3.15。1.5はこの明確な谷間に置いてある)
+_SESSION_MED = {}      # (manifest, source) -> 中央値。島ごとに測り直さない
+
+
+def session_median(source="mapany", fallback="slab",
+                   manifest="pv_manifest.json"):
+    """セッション全島の m_per_unit の中央値 (外れ値抑制の基準)
+
+    各島の推定は当たり外れがあるが、**中央値は頑健**。同一セッションで
+    m_per_unit が変わる物理的理由が無いので、これを真値の代理に使う。
+    """
+    key = (manifest, source)
+    if key in _SESSION_MED:
+        return _SESSION_MED[key]
+    try:
+        man = json.loads((BENCH_DIR / manifest).read_text())
+    except Exception:
+        _SESSION_MED[key] = None
+        return None
+    # **主供給源の値だけで中央値を取る**。fallback (slab) は誤差97〜383%で、
+    # 混ぜると中央値ごと引っ張られる (0925: 0.454 -> 0.575)
+    vals, weak = [], []
+    for m in man:
+        try:
+            v, _ = SOURCES[source](m["tag"])
+            tgt = vals
+        except Exception:
+            try:
+                v, _ = SOURCES[fallback](m["tag"])
+                tgt = weak
+            except Exception:
+                continue
+        if v and np.isfinite(v) and v > 0:
+            tgt.append(float(v))
+    use = vals if len(vals) >= 3 else vals + weak
+    med = float(np.median(use)) if len(use) >= 3 else None
+    _SESSION_MED[key] = med
+    return med
+
+
+def m_per_unit(tag, source="mapany", fallback="slab", use_calib=True,
+               clamp_outlier=True):
     """島のm_per_unitを返す。較正があれば適用、取れなければ fallback へ
 
     優先順: ①その島自身のアンカー由来の補正値 ②事前×セッション中央値 ③素の事前
@@ -185,6 +243,18 @@ def m_per_unit(tag, source="mapany", fallback="slab", use_calib=True):
     if cal:
         v = v * cal["session_bias"]
         info = {**info, "bias": cal["session_bias"]}
+    if clamp_outlier:
+        med = session_median(source, fallback)
+        # fallbackした島は供給源そのものが信用できない (slabは誤差97〜383%)。
+        # 比が許容内でも中央値に寄せた方が安全
+        fell_back = "fallback_from" in info
+        off = med and not (1 / OUTLIER_TOL <= v / med <= OUTLIER_TOL)
+        if med and (fell_back or off):
+            # 同一セッションでm_per_unitが変わる物理的理由は無い。
+            # 外れた個別推定より中央値の方が信頼できる
+            info = {**info, "clamped_from": float(v), "session_median": med,
+                    "why": "fallback" if fell_back else "outlier"}
+            v = med
     return float(v), info
 
 
