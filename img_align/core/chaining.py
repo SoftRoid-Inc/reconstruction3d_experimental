@@ -28,8 +28,6 @@ TRIM = 0.7            # 対応の下位30%(距離大)を捨てる
 MAX_PTS = 20000
 
 
-
-
 def trimmed_icp_sim3(src, dst, T0, fix_R=False):
     """src(→dst)の trimmed Sim(3) ICP。src/dst: (N,3)
 
@@ -298,6 +296,8 @@ def chain_and_save(cdirs, tag, yaw_lock=False, drift_fix=False):
             g[:3, 3] = apply(T[k], po[None, :3, 3])[0]
             frame_pose.setdefault(n, []).append(g)
         xyz, rgb = read_ply_xyzrgb(cdir / "points.ply")
+        # 間引きは `[::8]`。ボクセル化は実測で有害だった (README「試して捨てた
+        # 実装」)。点の多さ自体が信頼度情報なので一様化してはいけない
         all_pts.append(apply(T[k], xyz[::8]).astype(np.float32))
         all_rgb.append(rgb[::8])
     if n_skipped:
