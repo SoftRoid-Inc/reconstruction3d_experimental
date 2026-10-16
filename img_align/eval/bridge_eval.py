@@ -252,6 +252,32 @@ def consensus(a_end, b_start, modes):
     return float(np.median(d))
 
 
+def junction_kind(a_end, b_start):
+    """切れ目の種類を返す ("階段" / "静止" / "分割" / "不明")
+
+    島は①IMUの階段イベント ②静止 (ZUPT) ③--max-seg の等分割 で切れる。
+    ③は**連続したフレームの人為的な分割**なので視覚的な重なりがあり、
+    ①②とは橋の難易度が本質的に違う。混ぜて集計すると傾向が見えない。
+    """
+    import json
+    from img_align.config import IMU_DIR
+    gap = b_start - a_end - 1
+    if gap <= 1:
+        return "分割"
+    tr = IMU_DIR / "transitions.json"
+    if tr.exists():
+        for e in json.loads(tr.read_text())["events"]:
+            if int(e["frame_start"]) <= b_start and int(e["frame_end"]) >= a_end:
+                return "階段"
+    il = IMU_DIR / "idle_spans.json"
+    if il.exists():
+        for sp in json.loads(il.read_text())["spans"]:
+            if int(sp["frame_start"]) <= b_start and \
+                    int(sp["frame_end"]) >= a_end:
+                return "静止"
+    return "不明"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--modes", nargs="*", default=["ends", "span", "both"])
@@ -262,10 +288,20 @@ def main():
                     help="方式間の一致度とGT誤差を並べる (採否判定の検証)")
     args = ap.parse_args()
     gt = load_gt()
-    js = ([tuple(int(v) for v in args.junction.split(":"))] if args.junction
-          else junctions())
+    if args.junction:
+        js = [tuple(int(v) for v in args.junction.split(":"))]
+    elif args.consensus:
+        # グループ化が実際に見る切れ目 = **島の隣接ペア**。IMU区間の切れ目だけ
+        # 見ると --max-seg の分割 (連続フレームの人為的な分割) が漏れる。
+        # 分割は視覚的な重なりがあるので、橋の難易度の対照群になる
+        from img_align.eval.bridge_view import _manifest_islands
+        man = _manifest_islands()
+        js = [(A["b"], B["a"]) for A, B in zip(man, man[1:])]
+    else:
+        js = junctions()
     if args.consensus:
-        print(f"{'切れ目':>12s} {'一致度':>8s} {'最良GT':>8s} {'最悪GT':>8s}")
+        print(f"{'切れ目':>12s} {'種類':>5s} {'階':>8s} {'隙間':>5s} "
+              f"{'一致度':>8s} {'最良GT':>8s} {'最悪GT':>8s}")
         for a, b in js:
             try:
                 c = consensus(a, b, args.modes)
@@ -277,10 +313,17 @@ def main():
             except Exception as e:
                 print(f"{a:5d}->{b:<5d}  失敗 ({type(e).__name__}: {e})")
                 continue
+            ma, mb = _islands(a, b)
+            fl = (f"{ma['floor']}->{mb['floor']}" if ma is not None else "?")
+            same = ("同一" if ma is not None and ma["floor"] == mb["floor"]
+                    else "またぎ")
+            kind = junction_kind(a, b)
+            head = (f"{a:5d}->{b:<5d} {kind:>5s} {fl:>8s} "
+                    f"{b - a - 1:4d}f {same}")
             if c is None or not es:
-                print(f"{a:5d}->{b:<5d}  評価不能")
+                print(f"{head}  評価不能")
                 continue
-            print(f"{a:5d}->{b:<5d} {c:7.2f}m {min(es):7.2f}m {max(es):7.2f}m")
+            print(f"{head} {c:7.2f}m {min(es):7.2f}m {max(es):7.2f}m")
         return
     if args.join:
         print(f"{'切れ目':>12s} {'mode':>6s} {'結合':>7s} {'島A単独':>8s} "
