@@ -1,4 +1,4 @@
-"""外部テストデータセットを大量に回す実走スクリプト
+"""外部テストデータセットを大量に回す実走 (CLI=typer / 設定=hydra)
 
 `polish-pipeline/scripts/sfm_testdataset` の240件 (うちINSTA 156件) を
 取り込み → PanoVGGT推論 → チェーン → ポーズグラフ → 評価 まで通し、
@@ -19,26 +19,26 @@
 | 工程 | 秒 | 割合 |
 |---|---|---|
 | **推論+チェーン** | **357** | **76%** |
-| **取込 (S3同期)** | **82** | **17%** |
+| **取込 (S3)** | **82** | **17%** |
 | ポーズグラフ | 32 | 7% |
 | 評価 | 0.4 | 0% |
 
-ポーズグラフと評価は誤差。**GPU (推論) と ネットワーク (S3) は別資源**なので
-**次の件のダウンロードを現在の件の推論と重ねる** (`--prefetch`、既定ON)。
-これで取込の82秒が隠れ、1件あたり約17%短縮する。
-さらに縮めるなら推論そのもの (1チャンク9.4秒 × チャンク数) を削るしかない。
-subprocess の起動コストは**0.28秒で無視できる** — 実測せずに当たりを付けると
-的を外す。
+**GPU (推論) と ネットワーク (S3) は別資源**なので**次の件のダウンロードを
+現在の件の推論と重ねる** (`run.prefetch`、既定ON)。これで取込が隠れ1件あたり
+約17%短縮する。subprocess の起動コストは**0.28秒で無視できる** — 実測せずに
+当たりを付けると的を外す。
 
 ## 使い方
-    # 候補を見る (INSTA + GTあり + 複数フロア)
-    python -m img_align.tools.ext_batch list --limit 20
-    # 実走 (5件ずつなど小分けに)
-    python -m img_align.tools.ext_batch run --limit 5
-    # 集計してレポート
+
+    python -m img_align.tools.ext_batch list
+    python -m img_align.tools.ext_batch run  select.limit=10
     python -m img_align.tools.ext_batch report
+
+設定は `img_align/conf/ext_batch.yaml`。`key=value` で上書きできる:
+
+    ... run select.limit=20 select.skip=10 run.keep_chunks=true
+    ... run pipeline.stride=10 pipeline.chunk_size=24
 """
-import argparse
 import csv
 import json
 import os
@@ -48,62 +48,85 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import List, Optional
 
-import numpy as np
+import typer
+from hydra import compose, initialize_config_dir
+from omegaconf import DictConfig, OmegaConf
 
-SRC = Path("/home/maren/git/polish-pipeline/scripts/sfm_testdataset")
-BUCKET = "s3://p2-test-data-bucket/person_mask_gt"
-DRAWING_BUCKET = "s3://zenshot-private-bucket-production/"
 ROOT = Path(__file__).resolve().parents[2]
-EXT = ROOT / "ext"
-MIN_FRAMES, MAX_FRAMES = 150, 900   # 短すぎ=島が立たない / 長すぎ=1件が重い
+CONF_DIR = ROOT / "img_align" / "conf"
+app = typer.Typer(add_completion=False,
+                  help="外部テストデータセットの大量実走")
+
+
+def load_cfg(overrides: Optional[List[str]] = None,
+             name: str = "ext_batch") -> DictConfig:
+    """hydra設定を読む。overrides は `key=value` の列"""
+    with initialize_config_dir(config_dir=str(CONF_DIR), version_base=None):
+        return compose(config_name=name, overrides=list(overrides or []))
+
+
+def _p(cfg, key) -> Path:
+    v = Path(cfg.paths[key])
+    return v if v.is_absolute() else ROOT / v
 
 
 def _sh(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, **kw)
 
 
-def candidates():
-    """INSTA かつ GTあり の候補 [(s3key, 枚数, フロア数)] を長さ順に返す"""
-    rows = list(csv.DictReader(open(SRC / "trajectory_data_by_scan_data_id.csv")))
-    info = json.loads((SRC / "s3_key_info.json").read_text())
-    insta = {r[0]: r[2] for r in info if r[1] == "INSTA"}
+# ----------------------------------------------------------------- 候補選び
+
+def candidates(cfg):
+    """条件に合う候補 [(s3key, 枚数, フロア数)]"""
+    src = _p(cfg, "src")
+    rows = list(csv.DictReader(
+        open(src / "trajectory_data_by_scan_data_id.csv")))
+    info = json.loads((src / "s3_key_info.json").read_text())
+    cam = {r[0]: r[2] for r in info if r[1] == cfg.select.camera}
     floors = {}
     for r in rows:
         k = r["metadata_s3_key"].rsplit("/data_number_0", 1)[0]
-        if k in insta:
+        if k in cam:
             floors.setdefault(k, set()).add(r["floor_id"])
-    out = [(k, insta[k], len(f)) for k, f in floors.items()
-           if MIN_FRAMES <= insta[k] <= MAX_FRAMES]
-    # フロア数が多く・短いものを優先 (情報量が多くて軽い)
-    return sorted(out, key=lambda x: (-x[2], x[1]))
+    out = [(k, cam[k], len(f)) for k, f in floors.items()
+           if cfg.select.min_frames <= cam[k] <= cfg.select.max_frames]
+    if cfg.select.order == "floors_desc":
+        out.sort(key=lambda x: (-x[2], x[1]))   # 情報量が多くて軽い順
+    else:
+        out.sort(key=lambda x: x[1])
+    return out
 
 
 def name_of(key):
-    """s3キー → ディレクトリ名 / セッション名"""
+    """s3キー → (ディレクトリ名, セッション名)"""
     p = key.split("/")
     return f"sfm{p[2]}_{p[3]}{p[4]}{p[5]}", f"e{p[2]}x{p[4]}{p[5]}"
 
 
-def setup(key):
-    """取り込み: 画像・マスク・図面・GT を揃えて meta.json を書く"""
+# ------------------------------------------------------------------- 取り込み
+
+def setup(cfg, key):
+    """画像・マスク・図面・GT を揃えて meta.json を書く"""
     d, sess = name_of(key)
-    out = EXT / d
+    out = _p(cfg, "ext") / d
     if (out / "meta.json").exists():
         return out, sess
     out.mkdir(parents=True, exist_ok=True)
-    r = _sh(["aws", "s3", "sync", f"{BUCKET}/{key}/", str(out),
+    r = _sh(["aws", "s3", "sync", f"{cfg.paths.bucket}/{key}/", str(out),
              "--only-show-errors"])
     if r.returncode or not (out / "images").is_dir():
         raise RuntimeError(f"同期失敗: {r.stderr[:200]}")
+    src = _p(cfg, "src")
     rows = [x for x in csv.DictReader(
-        open(SRC / "trajectory_data_by_scan_data_id.csv"))
+        open(src / "trajectory_data_by_scan_data_id.csv"))
         if x["metadata_s3_key"].startswith(key)]
     tids = {x["trajectory_id"] for x in rows}
     fids = {x["floor_id"] for x in rows}
-    pts = [p for p in csv.DictReader(open(SRC / "trajectory_points.csv"))
+    pts = [p for p in csv.DictReader(open(src / "trajectory_points.csv"))
            if p["trajectory_id"] in tids]
-    fl = [f for f in csv.DictReader(open(SRC / "floor_info.csv"))
+    fl = [f for f in csv.DictReader(open(src / "floor_info.csv"))
           if f["floor_id"] in fids]
     for fn, data in (("trajectory_data_by_scan_data_id.csv", rows),
                      ("trajectory_points.csv", pts), ("floor_info.csv", fl)):
@@ -116,7 +139,8 @@ def setup(key):
         dst = out / "zumen" / f"{f['floor_name']}.jpg"
         if not dst.exists():
             _sh(["aws", "s3", "cp",
-                 DRAWING_BUCKET + f["image_url"].split("amazonaws.com/", 1)[1],
+                 cfg.paths.drawing_bucket
+                 + f["image_url"].split("amazonaws.com/", 1)[1],
                  str(dst), "--only-show-errors"])
     p = key.split("/")
     (out / "meta.json").write_text(json.dumps(
@@ -126,9 +150,33 @@ def setup(key):
     return out, sess
 
 
-def evaluate(sess):
-    """島ごとに 逐次 / PG+ループ の GT残差 (図面幅で正規化) を測る"""
-    code = r'''
+class Prefetcher:
+    """次の件のS3取込を裏で走らせる (GPUが空かないので重ねられる)
+
+    取込82秒 / 推論357秒なので**取込は完全に隠れる**。
+    """
+
+    def __init__(self, cfg, keys):
+        self.cfg, self.keys, self.i, self.fut = cfg, list(keys), 0, None
+        self.pool = ThreadPoolExecutor(max_workers=1)
+
+    def next(self):
+        """現在の件の取込完了を待ち、次の件の取込を開始する"""
+        if self.i >= len(self.keys):
+            return
+        got = self.fut or self.pool.submit(setup, self.cfg, self.keys[self.i])
+        self.i += 1
+        self.fut = (self.pool.submit(setup, self.cfg, self.keys[self.i])
+                    if self.i < len(self.keys) else None)
+        got.result()
+
+    def close(self):
+        self.pool.shutdown(wait=False, cancel_futures=True)
+
+
+# --------------------------------------------------------------------- 評価
+
+_EVAL_CODE = r'''
 import json
 import numpy as np
 from img_align.config import BENCH_DIR, PROP, CFG
@@ -160,7 +208,11 @@ print("@@" + json.dumps({"n_frames": len(CFG["frames"]), "n_gt": len(gt),
     "coverage": len(covered & set(gt))/max(len(gt),1),
     "frame_cov": len(covered)/max(len(CFG["frames"]),1), "islands": isl}))
 '''
-    r = _sh([sys.executable, "-c", code],
+
+
+def evaluate(sess):
+    """島ごとに 逐次 / PG+ループ の GT残差 (図面幅で正規化) を測る"""
+    r = _sh([sys.executable, "-c", _EVAL_CODE],
             env={**os.environ, "IMG_SESSION": sess, "PYTHONPATH": str(ROOT)})
     for ln in r.stdout.splitlines():
         if ln.startswith("@@"):
@@ -168,38 +220,43 @@ print("@@" + json.dumps({"n_frames": len(CFG["frames"]), "n_gt": len(gt),
     raise RuntimeError(f"評価失敗: {r.stderr[-400:]}")
 
 
-def process(key, keep_chunks=False, verbose=True):
-    """1件を通す。戻り値 result.json の中身
+# ------------------------------------------------------------------- 1件処理
 
-    **工程別の所要時間を必ず測る** — 最適化の的を外さないため。実測なしで
-    「subprocessが重い」等と当たりを付けると外す (import は0.28秒だった)。
+def process(cfg, key):
+    """1件を通す。戻り値は result.json の中身
+
+    **工程別の所要時間を必ず測る** — 最適化の的を外さないため。
     """
-    t0 = time.time()
-    lap = {}
+    t0, lap = time.time(), {}
 
     def tick(k, fn):
         s = time.time()
         r = fn()
         lap[k] = round(time.time() - s, 1)
-        if verbose:
-            print(f"    [{k}] {lap[k]}秒", flush=True)
+        if cfg.run.verbose:
+            typer.echo(f"    [{k}] {lap[k]}秒")
         return r
 
-    out, sess = tick("取込", lambda: setup(key))
+    out, sess = tick("取込", lambda: setup(cfg, key))
     res_p = out / "result.json"
     if res_p.exists():
-        print(f"  [skip] {sess} は済み")
+        typer.echo(f"  [skip] {sess} は済み")
         return json.loads(res_p.read_text())
     env = {**os.environ, "IMG_SESSION": sess, "PYTHONPATH": str(ROOT)}
-    r = tick("推論+チェーン", lambda: _sh(
-        [sys.executable, "-m", "img_align.pipeline", "run", "--session", sess,
-         "--segments", "gt", "--max-seg", "160", "--no-eval"],
-        env=env, cwd=str(ROOT)))
+    argv = [sys.executable, "-m", "img_align.pipeline", "run",
+            "--session", sess, "--segments", str(cfg.pipeline.segments),
+            "--max-seg", str(cfg.pipeline.max_seg), "--no-eval"]
+    for opt, val in (("--stride", cfg.pipeline.stride),
+                     ("--chunk-size", cfg.pipeline.chunk_size)):
+        if val is not None:
+            argv += [opt, str(val)]
+    r = tick("推論+チェーン", lambda: _sh(argv, env=env, cwd=str(ROOT)))
     if r.returncode:
         raise RuntimeError(f"pipeline失敗: {r.stderr[-400:]}")
     man = json.loads(
         (out / "results" / sess / "frontend_bench" / "pv_manifest.json")
         .read_text())
+
     def _pg():
         d = {}
         for m in man:
@@ -212,110 +269,86 @@ def process(key, keep_chunks=False, verbose=True):
                     n = int(ln.split("採用")[1].split()[0])
             d[m["tag"]] = n
         return d
-    loops = tick("ポーズグラフ", _pg)
+
+    loops = tick("ポーズグラフ", _pg) if cfg.pipeline.posegraph else {}
     res = tick("評価", lambda: evaluate(sess))
+    # **どの設定で得た数字か**を結果自体に残す (レポートで同じ問題に当たった)
     res.update({"session": sess, "s3key": key, "loops": loops,
-                "sec": round(time.time() - t0, 1), "lap": lap})
+                "sec": round(time.time() - t0, 1), "lap": lap,
+                "cfg": OmegaConf.to_container(cfg.pipeline, resolve=True)})
     res_p.write_text(json.dumps(res))
-    if not keep_chunks:      # **ディスクが律速**: 評価が済んだら素材を捨てる
-        for sub in ("images", "masks", "results/%s/pcd" % sess):
-            p = out / sub
-            if p.exists():
-                shutil.rmtree(p, ignore_errors=True)
+    if not cfg.run.keep_chunks:   # 評価が済んだら素材を捨てる (ディスク律速)
+        for sub in ("images", "masks", f"results/{sess}/pcd"):
+            shutil.rmtree(out / sub, ignore_errors=True)
     return res
 
 
-class Prefetcher:
-    """次の件のS3取込を裏で走らせる (GPUが空かないので重ねられる)
+# --------------------------------------------------------------------- CLI
 
-    取込82秒 / 推論357秒なので、**取込は完全に隠れる**。
-    """
-
-    def __init__(self, keys):
-        self.keys = list(keys)
-        self.i = 0
-        self.fut = None
-        self.pool = ThreadPoolExecutor(max_workers=1)
-
-    def _start(self, k):
-        return self.pool.submit(setup, k)
-
-    def next(self):
-        """次の件の (dir, session) を返す。裏で更に次を取りに行く"""
-        if self.i >= len(self.keys):
-            return None, None, None
-        k = self.keys[self.i]
-        fut, self.fut = (self.fut, None), None
-        got = fut[0] if fut[0] is not None else self._start(k)
-        self.i += 1
-        if self.i < len(self.keys):      # 次を先読み開始
-            self.fut = self._start(self.keys[self.i])
-        out, sess = got.result()
-        return k, out, sess
-
-    def close(self):
-        self.pool.shutdown(wait=False, cancel_futures=True)
+@app.command("list")
+def cmd_list(overrides: List[str] = typer.Argument(
+        None, help="hydra上書き (例 select.limit=20)")):
+    """候補を一覧する"""
+    cfg = load_cfg(overrides)
+    sel = candidates(cfg)[cfg.select.skip:cfg.select.skip + cfg.select.limit]
+    typer.echo(f"{'s3key':52s} {'枚数':>5s} {'階':>3s}  名前")
+    for k, n, f in sel:
+        typer.echo(f"{k:52s} {n:5d} {f:3d}  {name_of(k)[1]}")
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    sub = ap.add_subparsers(dest="cmd", required=True)
-    for c in ("list", "run"):
-        s = sub.add_parser(c)
-        s.add_argument("--limit", type=int, default=5)
-        s.add_argument("--skip", type=int, default=0)
-        if c == "run":
-            s.add_argument("--keep-chunks", action="store_true")
-            s.add_argument("--no-prefetch", action="store_true",
-                           help="次の件のS3取込を先読みしない (既定は先読み)")
-    sub.add_parser("report").add_argument("--out", default=str(
-        ROOT / "img_align" / "results" / "ext_batch_report.html"))
-    a = ap.parse_args()
-
-    if a.cmd == "report":
-        rows = [json.loads(p.read_text())
-                for p in sorted(EXT.glob("*/result.json"))]
-        print(f"{len(rows)}件の結果を集計")
-        import statistics as st
-        seq = [i["seq"]["resid"] for r in rows for i in r["islands"]]
-        pg = [i["pg"]["resid"] for r in rows for i in r["islands"] if i["pg"]]
-        if seq:
-            print(f"  島{len(seq)}本  逐次 {st.median(seq):.4f} -> "
-                  f"PG {st.median(pg):.4f}")
-        out = {r["session"]: r for r in rows}
-        p = ROOT / "img_align" / "results" / "ext_batch_data.json"
-        p.write_text(json.dumps(out))
-        print(f"-> {p}")
-        return
-
-    cand = candidates()[a.skip:a.skip + a.limit]
-    if a.cmd == "list":
-        print(f"{'s3key':52s} {'枚数':>5s} {'階':>3s}  {'名前'}")
-        for k, n, f in cand:
-            print(f"{k:52s} {n:5d} {f:3d}  {name_of(k)[1]}")
-        return
+@app.command("run")
+def cmd_run(overrides: List[str] = typer.Argument(
+        None, help="hydra上書き (例 select.limit=10 run.keep_chunks=true)")):
+    """実走する"""
+    import numpy as np
+    cfg = load_cfg(overrides)
+    sel = candidates(cfg)[cfg.select.skip:cfg.select.skip + cfg.select.limit]
+    typer.echo(OmegaConf.to_yaml({"select": cfg.select,
+                                  "pipeline": cfg.pipeline, "run": cfg.run}))
+    pf = Prefetcher(cfg, [k for k, _, _ in sel]) if cfg.run.prefetch else None
     ok = ng = 0
-    pf = None if a.no_prefetch else Prefetcher([k for k, _, _ in cand])
-    for i, (k, n, f) in enumerate(cand, 1):
-        print(f"\n===== [{i}/{len(cand)}] {k} ({n}枚 {f}フロア)", flush=True)
+    for i, (k, n, f) in enumerate(sel, 1):
+        typer.echo(f"\n===== [{i}/{len(sel)}] {k} ({n}枚 {f}フロア)")
         if pf is not None:
-            pf.next()        # ここで現在の件の取込完了を待ち、次を先読み開始
+            pf.next()
         try:
-            r = process(k, a.keep_chunks)
+            r = process(cfg, k)
             isl = r["islands"]
-            med = (np.median([x["seq"]["resid"] for x in isl])
-                   if isl else float("nan"))
-            print(f"  -> {len(isl)}島 逐次中央 {med:.4f} "
-                  f"({r.get('sec', 0):.0f}秒)")
+            med = (np.median([x["seq"]["resid"] for x in isl]) if isl
+                   else float("nan"))
+            typer.echo(f"  -> {len(isl)}島 逐次中央 {med:.4f} "
+                       f"({r.get('sec', 0):.0f}秒)")
             ok += 1
         except Exception as e:
-            print(f"  !! 失敗 ({type(e).__name__}: {e})")
+            typer.secho(f"  !! 失敗 ({type(e).__name__}: {e})",
+                        fg=typer.colors.RED)
             ng += 1
-        print(f"  ディスク: {shutil.disk_usage(EXT).free / 2**30:.0f}GB 空き")
+        free = shutil.disk_usage(_p(cfg, "ext")).free / 2 ** 30
+        typer.echo(f"  ディスク: {free:.0f}GB 空き")
     if pf is not None:
         pf.close()
-    print(f"\n完了 成功{ok} / 失敗{ng}")
+    typer.secho(f"\n完了 成功{ok} / 失敗{ng}",
+                fg=typer.colors.GREEN if not ng else typer.colors.YELLOW)
+
+
+@app.command("report")
+def cmd_report(overrides: List[str] = typer.Argument(None)):
+    """result.json を集計する"""
+    import statistics as st
+    cfg = load_cfg(overrides)
+    rows = [json.loads(p.read_text())
+            for p in sorted(_p(cfg, "ext").glob("*/result.json"))]
+    typer.echo(f"{len(rows)}件の結果を集計")
+    seq = [i["seq"]["resid"] for r in rows for i in r["islands"]]
+    pg = [i["pg"]["resid"] for r in rows for i in r["islands"] if i.get("pg")]
+    if seq:
+        typer.echo(f"  島{len(seq)}本  逐次 {st.median(seq):.4f}"
+                   + (f" -> PG {st.median(pg):.4f}" if pg else ""))
+    p = ROOT / cfg.report.data
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({r["session"]: r for r in rows}))
+    typer.echo(f"-> {p}")
 
 
 if __name__ == "__main__":
-    main()
+    app()

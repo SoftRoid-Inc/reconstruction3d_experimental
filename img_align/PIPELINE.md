@@ -139,14 +139,27 @@ IMG_SESSION=0912 python -m img_align.core.posegraph \
 
 ### 外部テストデータの大量実走
 
+CLIは **typer**、設定は **hydra** (`img_align/conf/ext_batch.yaml`)。
+
 ```bash
-python -m img_align.tools.ext_batch list --limit 20   # 候補を見る
-python -m img_align.tools.ext_batch run  --limit 10   # 実走
-python -m img_align.tools.ext_batch report            # 集計
+python -m img_align.tools.ext_batch list      # 候補を見る
+python -m img_align.tools.ext_batch run       # 実走
+python -m img_align.tools.ext_batch report    # 集計
+```
+
+設定は `key=value` でその場上書きできる。
+
+```bash
+... run select.limit=20 select.skip=10        # 件数と開始位置
+... run pipeline.stride=10 pipeline.chunk_size=24   # チャンク設定を変えて比較
+... run run.keep_chunks=true                  # 素材を消さない (デバッグ時)
+... run --config-name ext_batch_long          # 設定ファイルごと差し替え
 ```
 
 `polish-pipeline/scripts/sfm_testdataset` の240件(INSTA 156件)を
 取り込み→推論→チェーン→ポーズグラフ→評価まで通す。
+**実走した `pipeline` 設定は `result.json` に埋め込まれる**ので、
+どの条件で得た数字かが結果自体から追える。
 
 ---
 
