@@ -73,17 +73,35 @@ PROPERTY = {
                      / "colmap_coarse" / "0"),
 }
 
-# --- 外部テストデータセット (polish-pipeline の sfm_testdataset、240件中のINSTA)
+# --- 外部テストデータセット (polish-pipeline の sfm_testdataset、INSTA 156件)
 # 図面の壁アノテーション (labelme) が無いので**図面アンカーは動かない**。
-# GT軌跡だけで測れるもの (島の形状品質・橋渡しの接続精度) の検証に使う。
-# gt_session は撮影日 (MMDD) で、セッション名とは別物
-for _n, _sess in (("e12343", "0518"), ("e11196", "0518")):
-    _d = _EXT / ("sfm" + _n[1:])
-    PROPERTY[_n] = Property(root=_d, frames_dir=_d / "images",
-                            zumen_dir=_d / "zumen",
-                            known_width_mm=None, mm_per_px=None,
-                            person_mask_dir=_d / "masks",
-                            gt_session=_sess)
+# GT軌跡だけで測れるもの (島の形状品質・ポーズグラフ・橋渡し) の検証に使う。
+#
+# `ext/<name>/` を**自動で走査して登録**する (大量データを回すので1件ずつ
+# 手で書かない)。各ディレクトリは tools/ext_batch.py が用意する:
+#   images/ masks/ zumen/ trajectory_points.csv
+#   trajectory_data_by_scan_data_id.csv floor_info.csv meta.json
+# セッション名は meta.json の "session"、gt_session は撮影日 (MMDD) で別物
+# (同じ日に撮った別スキャンがあるため名前が衝突する)
+def _register_ext():
+    import json as _json
+    if not _EXT.exists():
+        return
+    for _d in sorted(_EXT.iterdir()):
+        mp = _d / "meta.json"
+        if not mp.is_file():
+            continue
+        try:
+            m = _json.loads(mp.read_text())
+        except Exception:
+            continue
+        PROPERTY[m["session"]] = Property(
+            root=_d, frames_dir=_d / "images", zumen_dir=_d / "zumen",
+            known_width_mm=None, mm_per_px=None,
+            person_mask_dir=_d / "masks", gt_session=m["gt_session"])
+
+
+_register_ext()
 # 28-BBBBB の追加撮影日は構成が同一なのでまとめて登録
 for _d in ("0715", "0912", "0925"):
     PROPERTY[_d] = Property(root=_28_41237,
