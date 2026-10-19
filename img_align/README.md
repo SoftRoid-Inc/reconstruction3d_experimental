@@ -192,10 +192,10 @@ subprocess 起動)。`mapany` 後処理のみ docker サービス `mapanything` 
 |---|---|
 | `config.py` | セッション/物件レジストリ・パス・SESSION_CFG(唯一のIMG_SESSION読取り元)。IMG_SESSION はパスも受け、`_register_dataset` がその場で Property を組む |
 | `steps.py` | **段の登録表と依存解決** (`needs`/`before`/`caps` + graphlib)。順序はここが決める |
-| `api.py` | 外部から呼ぶ入口 (`run` = 子プロセス / `run_inprocess` / `plan`) |
+| `api.py` | 外部から呼ぶ入口 (`run` / `plan`)。**このプロセスで実行する** — 1ポッド1データセットならプロセス分離は要らない |
 | `pipeline.py` | 既存7セッション用の互換CLI (引数を steps.py のオプションへ翻訳するだけ) |
 | `conf/` | hydra設定 (`recon.yaml` = 入力ディレクトリ実行 / `ext_batch.yaml` = 大量実走) |
-| `core/` | `caps`(入力の能力判定) `ingest`(入力の imu/ を results へ台帳つきコピー) `panovggt`(チャンク推論subprocess) `panovggt_batch`(一括推論=モデル読込1回) `floor_assign`(手動の階割当) `floor_seq`(IMU遷移からの階決定。2/6セッションのみ) `pi3`(Pi3/Pi3-FT推論、PanoVGGT互換出力) `chunking`(島計画) `chaining`(連結) `crops`(e2pクロップ) `plan_grid`(図面グリッド) `geometry`(Sim3/重力/ヨー統計) `io_ply` |
+| `core/` | `caps`(入力の能力判定 + 使える CPU 数) `signals`(入口が SIGTERM をプロセスグループへ中継) `ingest`(入力の imu/ を results へ台帳つきコピー) `panovggt`(チャンク推論subprocess) `panovggt_batch`(一括推論=モデル読込1回) `floor_assign`(手動の階割当) `floor_seq`(IMU遷移からの階決定。2/6セッションのみ) `pi3`(Pi3/Pi3-FT推論、PanoVGGT互換出力) `chunking`(島計画) `chaining`(連結) `crops`(e2pクロップ) `plan_grid`(図面グリッド) `geometry`(Sim3/重力/ヨー統計) `io_ply` |
 | `postproc/` | 上表の後処理+`anchor_run`(全島を並列アンカー) `mapany_run`(mapany起動) `anchor_score`(候補スコア) `scale_prior`(m_per_unitの供給源) `island_quality`(島の指紋の濃さ。判別力は無かった) `metric_stitch`(図面なしメートル化。不発) `density_map`(壁密度地図) `plan_match`(FFTグリッド照合) `plan_icp`(point-to-line ICP・座標変換ユーティリティ) `anchor`(島アンカー本体・prepare_island) |
 | `eval/` | `anchor_oracle`(候補に正解があるか) `anchor_confidence`(GT無しで当たりを見分ける指標) `anchor_overlay`(アンカー素の出力) `density_view`(密度地図) `outdoor_proxy`(屋外島の暫定判定) `scale_probe` `gt_traj`(GT読込・`mm_per_px()`=遅延評価の関数・GTは物件ごとの trajectory_points.csv) `frontend`(フィットATE) `chunk_cmp`(チャンク単体採点+`gt_interp`) `floor_overlay`(階別の図面オーバーレイ比較) `overview`(島別色分け) `island_diag`(島内診断) `depth`(壁面残差で点群品質比較) |
 | `out/` | `export` `viewer` |

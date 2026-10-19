@@ -27,15 +27,11 @@ px→m が決まらず図面アンカーは動かない:
 セッション名は既定で入力ディレクトリ名。同じ入力を条件違いで回すときは
 `session=myrun` を付けると出力が `results/myrun/` に分かれる。
 """
-import json
-import os
-import subprocess
-import sys
 from typing import List
 
 import typer
 
-from img_align.tools._hydra import ROOT, load_cfg, to_plain
+from img_align.tools._hydra import load_cfg, to_plain
 
 app = typer.Typer(add_completion=False, help=__doc__)
 
@@ -52,33 +48,18 @@ def _cfg(overrides):
     return d
 
 
-def _session_ref(d):
-    from img_align.api import session_ref
-    return session_ref(d["input"], d.get("session"))
-
-
-def _child(code, ref, check=True):
-    """IMG_SESSION を立てた子プロセスで実行する
-
-    config はプロセス単位で凍結するので、セッションを跨ぐ処理は必ず分ける。
-    """
-    env = {**os.environ, "PYTHONPATH": str(ROOT), "IMG_SESSION": ref}
-    p = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env)
-    if check and p.returncode:
-        raise typer.Exit(p.returncode)
-    return p.returncode
-
-
 @app.command()
 def run(overrides: List[str] = ARG):
-    """設定で選んだ段を走らせる (前提の段は自動で補う)"""
+    """設定で選んだ段を走らせる (前提の段は自動で補う)
+
+    **このプロセスで完結する**ので、ポッドの PID 1 としてそのまま `exec`
+    できる (SIGTERM が中継なしで届く)。失敗は例外のまま落として非ゼロ終了する。
+    """
     d = _cfg(overrides)
     steps = list(d.pop("steps") or [])
     inp, sess = d.pop("input"), d.pop("session")
     from img_align.api import run as api_run
     res = api_run(inp, steps=steps, session=sess, **d)
-    if res.returncode:
-        raise typer.Exit(res.returncode)
     typer.echo(f"\nsession {res.session}\n出力 {res.results_dir}")
     if res.skipped:
         typer.echo("skip: " + ", ".join(res.skipped))
@@ -88,32 +69,31 @@ def run(overrides: List[str] = ARG):
 def inspect(overrides: List[str] = ARG):
     """入力を点検し、何が走って何がskipされるかを表示する (実行しない)"""
     d = _cfg(overrides)
-    steps = json.dumps(list(d.get("steps") or []))
+    from img_align.api import plan as api_plan
     # 点検なので能力不足でも**止めない** (strict=False)。止めると
     # 「何が足りないか一覧したい」という用途で使えない
-    _child(
-        "from img_align.core.caps import main as caps_main;"
-        "from img_align.steps import plan;"
-        "caps_main();"
-        f"order, skip = plan({steps}, strict=False);"
-        "print();"
-        "print('実行できる段:', ' -> '.join(order) or '(なし)');"
-        "[print(f'skip {k}: {v}') for k, v in skip.items()]",
-        _session_ref(d))
+    order, skip = api_plan(d["input"], list(d.get("steps") or []),
+                           d.get("session"), strict=False)
+    from img_align.core.caps import main as caps_main
+    caps_main()
+    typer.echo("")
+    typer.echo("実行できる段: " + (" -> ".join(order) or "(なし)"))
+    for k, v in skip.items():
+        typer.echo(f"skip {k}: {v}")
 
 
 @app.command()
-def steps(overrides: List[str] = ARG):
-    """段の一覧と依存関係"""
-    from img_align.steps import STEPS
-    w = max(len(s) for s in STEPS)
-    for s in STEPS.values():
-        dep = f"  <- {','.join(s.needs)}" if s.needs else ""
-        cap = f"  [要 {','.join(s.caps)}]" if s.caps else ""
-        typer.echo(f"{s.name:{w}}  {s.doc}{dep}{cap}")
+def steps():
+    """段の一覧と依存関係 (入力に依らないので設定は要らない)"""
+    from img_align.steps import describe
+    typer.echo("\n".join(describe()))
 
 
 def main():
+    # k8s の SIGTERM は PID 1 にしか来ない。GPU推論の subprocess と
+    # アンカーの fork ワーカーを孤児にしないよう、グループ全体へ中継する
+    from img_align.core.signals import forward_to_process_group
+    forward_to_process_group()
     app()
 
 

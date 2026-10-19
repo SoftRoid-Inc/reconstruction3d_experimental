@@ -21,8 +21,13 @@ CONTINUITY_STAGE = False
 
 
 def _anchor_one(args):
-    """1島をアンカー (プロセス並列のワーカー。例外は文字列で返す)"""
-    tag, floor, session_ref, suffix, cont = (*args, False)[:5]
+    """1島をアンカー (プロセス並列のワーカー。例外は文字列で返す)
+
+    args は 4要素 (tag, floor, session_ref, suffix) か、継続性拘束を使う
+    5要素 (+cont)。`ProcessPoolExecutor.map` に渡すので1引数にまとめてある。
+    """
+    tag, floor, session_ref, suffix = args[:4]
+    cont = args[4] if len(args) > 4 else False
     # 子プロセスでconfigを凍結させる。**SESSION ではなく SESSION_REF** を
     # 渡すこと (SESSION はデータセット登録後の派生名で、env に戻すと
     # レジストリに無くて落ちる)。fork では親の config がコピーされるので
@@ -48,7 +53,10 @@ def anchor_islands(manifest, jobs=None):
             for m in manifest if m.get("floor")]
     if not todo:
         return
-    jobs = jobs or min(len(todo), max(1, (os.cpu_count() or 4) // 4))
+    # os.cpu_count() ではなく caps.cpus()。ポッドの CPU limit を見ないと
+    # ノードのコア数で並列してしまい、点群を島ごとに読むここが OOMKilled になる
+    from img_align.core.caps import cpus
+    jobs = jobs or min(len(todo), max(1, cpus() // 4))
 
     def run(batch, label):
         if len(batch) <= 1 or jobs <= 1:

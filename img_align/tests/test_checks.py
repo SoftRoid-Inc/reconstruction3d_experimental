@@ -21,6 +21,10 @@ def test_mm_per_px_fixed():
     assert not check_config.mm_per_px_mismatch()
 
 
+def test_clean_imports():
+    assert not check_imports.clean_imports()
+
+
 @pytest.mark.parametrize("session", check_imports.DEFAULT_SESSIONS)
 def test_import_smoke(session):
     if session not in known_sessions():

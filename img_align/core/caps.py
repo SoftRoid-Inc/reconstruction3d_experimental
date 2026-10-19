@@ -8,10 +8,60 @@
   IMG_SESSION=/data/reconstruction python -m img_align.core.caps
 """
 import json
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from img_align.config import (CFG, FRAMES_DIR, IMU_DIR, PROP, SESSION,
                               frame_indices)
+
+CGROUP_V2 = Path("/sys/fs/cgroup/cpu.max")
+CGROUP_V1 = Path("/sys/fs/cgroup/cpu")
+
+
+def cpus(root="/"):
+    """このプロセスが実際に使える CPU 数
+
+    **`os.cpu_count()` を直接使ってはいけない。** ノードのコア数を返すので、
+    CPU limit 付きの Kubernetes ポッドでは桁違いに過剰な並列数になる
+    (ノード64コア → 16並列、ポッドの割当は4コア)。島ごとに点群を読む
+    アンカーでは、過剰並列はそのまま OOMKilled になる。
+
+    cgroup の quota → cpuset → ノードのコア数 の順で解決する。
+    `root` はテスト用 (cgroup ファイルを模したディレクトリを指す)。
+    """
+    root = Path(root)
+    v2 = root / CGROUP_V2.relative_to("/")
+    if v2.is_file():                              # cgroup v2: "<quota> <period>"
+        f = v2.read_text().split()
+        n = _quota(f[0], f[1]) if len(f) >= 2 else None
+        if n:
+            return n
+    v1 = root / CGROUP_V1.relative_to("/")
+    if v1.is_dir():                               # cgroup v1
+        try:
+            n = _quota((v1 / "cpu.cfs_quota_us").read_text(),
+                       (v1 / "cpu.cfs_period_us").read_text())
+        except OSError:
+            n = None
+        if n:
+            return n
+    try:
+        return len(os.sched_getaffinity(0))       # cpuset を反映する
+    except AttributeError:                        # Linux 以外
+        pass
+    return os.cpu_count() or 4
+
+
+def _quota(quota, period):
+    """quota/period -> CPU数 (切り上げ)。無制限・不正なら None"""
+    try:
+        q, p = float(quota), float(period or 100000)
+    except (TypeError, ValueError):
+        return None
+    if q <= 0 or p <= 0:                          # "max" / -1 = 無制限
+        return None
+    return max(1, int(-(-q // p)))
 
 # 能力名 -> 人間向けの説明
 DESC = {
@@ -36,7 +86,9 @@ class Caps:
         return name in self.have
 
     def reason(self, name):
-        return self.why.get(name, DESC.get(name, name) + " が無い")
+        if name in self.why:
+            return self.why[name]
+        return f"{DESC.get(name) or name} が無い"
 
     def as_dict(self):
         return {k: (k in self.have) for k in DESC}

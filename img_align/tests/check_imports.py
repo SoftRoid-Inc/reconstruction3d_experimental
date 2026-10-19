@@ -74,6 +74,40 @@ def smoke_all(session):
     return run_json(_CODE, session=session, timeout=600)
 
 
+# ---------------------------------------------------------------- import衛生
+# 入口のモジュールは **import しただけで config を凍結してはいけない**。
+# 凍結すると `IMG_SESSION` 未設定のとき既定 "0828" に落ち、新しい物件を
+# 28-AAAAA の図面・GT で処理して**例外なしに完走する** (2026-10-09に踏んだ形)。
+# api.run() 側の `_freeze` がこれを検出できるのも、api を import した時点で
+# まだ config が読まれていないからこそ。
+CLEAN_IMPORTS = ("img_align.api", "img_align.steps", "img_align.tools.recon",
+                 "img_align.tools._hydra")
+
+_CLEAN_CODE = """
+import importlib, json, sys
+bad = []
+for m in %r:
+    try:
+        importlib.import_module(m)
+    except Exception as e:
+        bad.append([m, f"import 自体が失敗: {type(e).__name__}: {e}"])
+        continue
+    if "img_align.config" in sys.modules:
+        bad.append([m, "import しただけで config が凍結した"])
+print(json.dumps(bad, ensure_ascii=False))
+"""
+
+
+def clean_imports():
+    """config を巻き込む入口モジュールを返す ([] なら健全)
+
+    **`IMG_SESSION` を外した子プロセス**で見るのが要点。事故の形が
+    「env 未設定のまま凍結」なので、env を立てたまま検査すると意味がない。
+    """
+    return [tuple(r) for r in
+            run_json(_CLEAN_CODE % (list(CLEAN_IMPORTS),), session=None)]
+
+
 def main():
     avail = known_sessions()
     todo = [s for s in (sys.argv[1:] or DEFAULT_SESSIONS)
@@ -89,6 +123,13 @@ def main():
         for m, t, e, _ in bad:
             print(f"    {m}: {t}: {e}")
         rc |= bool(bad)
+
+    dirty = clean_imports()
+    print(f"[{'OK' if not dirty else 'NG'}] import衛生: "
+          f"{len(CLEAN_IMPORTS)}入口が config を巻き込まないこと")
+    for m, why in dirty:
+        print(f"    {m}: {why}")
+    rc |= bool(dirty)
     return rc
 
 

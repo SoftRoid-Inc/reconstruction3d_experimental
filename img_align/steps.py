@@ -14,15 +14,15 @@
 import graphlib
 import json
 from dataclasses import dataclass, field
-from typing import Callable, Tuple
+from typing import Callable, Optional, Tuple
 
 
 @dataclass
 class Ctx:
     """ステップ間で受け渡す状態 (オプションと、いま対象にしている島の集合)"""
     opt: dict = field(default_factory=dict)
-    manifest: list = None          # 島 or 群れのマニフェスト
-    chunks_dir: str = None
+    manifest: Optional[list] = None     # 島 or 群れのマニフェスト
+    chunks_dir: Optional[str] = None
     tag_suffix: str = ""
     caps: object = None
     order: tuple = ()              # この実行で走る段 (前提の補完ずみ)
@@ -369,16 +369,30 @@ def execute(selected, opt=None):
     return ctx
 
 
-def main():
+def describe():
+    """段の一覧 (name / doc / 依存 / 必要な能力) を行のリストで返す"""
+    w = max(len(s) for s in STEPS)
+    out = []
+    for s in STEPS.values():
+        dep = f"  <- {','.join(s.needs)}" if s.needs else ""
+        cap = f"  [要 {','.join(s.caps)}]" if s.caps else ""
+        out.append(f"{s.name:{w}}  {s.doc}{dep}{cap}")
+    out.append(f"\n既定: {' '.join(DEFAULT_STEPS)}")
+    return out
+
+
+def main(argv=None):
+    """`argv` を渡さなければコマンドラインから取る
+
+    **呼び出し側から使うときは必ず `argv` を渡すこと。** `pipeline stages`
+    が `sys.argv` をそのまま拾って「未知のステップ: ['stages']」を出していた。
+    """
     import sys
-    sel = [a for a in sys.argv[1:] if not a.startswith("-")]
+    if argv is None:
+        argv = sys.argv[1:]
+    sel = [a for a in argv if not a.startswith("-")]
     if not sel:
-        w = max(len(s) for s in STEPS)
-        for s in STEPS.values():
-            dep = f"  <- {','.join(s.needs)}" if s.needs else ""
-            cap = f"  [要 {','.join(s.caps)}]" if s.caps else ""
-            print(f"{s.name:{w}}  {s.doc}{dep}{cap}")
-        print(f"\n既定: {' '.join(DEFAULT_STEPS)}")
+        print("\n".join(describe()))
         return
     run, skip = plan(sel)
     print("実行順:", " -> ".join(run))

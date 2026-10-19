@@ -61,6 +61,8 @@ def _opts(args):
 
 
 def main():
+    from img_align.core.signals import forward_to_process_group
+    forward_to_process_group()
     ap = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -106,7 +108,7 @@ def main():
         print(__doc__)
         from img_align.steps import main as steps_main
         print()
-        steps_main()
+        steps_main([])
         return
 
     args.post = [p for p in args.post.split(",") if p]

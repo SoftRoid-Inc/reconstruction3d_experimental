@@ -240,10 +240,13 @@ res = api.run("/data/reconstruction", steps=["anchor"], segments="imu")
 print(res.results_dir, res.islands, res.skipped)
 ```
 
-> `api.run()` は**必ず子プロセスを立てる**。`img_align.config` は import 時に
-> `SESSION/PROP/FRAMES_DIR/RESULTS_DIR/...` を凍結し、約90モジュールが
-> `from img_align.config import X` で値を束ねるので、`reload` では戻らない。
-> **1プロセス = 1データセット**。config 未 import なら `api.run_inprocess()`。
+> `api.run()` は**このプロセスで実行する**。`img_align.config` は import 時に
+> `SESSION/PROP/FRAMES_DIR/RESULTS_DIR/...` を凍結し、137箇所が
+> `from img_align.config import X` で値を束ねるので、`reload` では戻らない
+> = **1プロセス = 1データセット**。だから `IMG_SESSION` が決まる前に
+> `img_align.*` を import してはいけない (下の「Kubernetes / Dagster Pipes で
+> 回す」を参照)。同一プロセスから**別の**データセットを回したいときは、
+> `api` に分岐を足さず CLI を子プロセスで起こす。
 
 ### 既存7セッション (開発用CLI)
 
@@ -276,6 +279,78 @@ IMG_SESSION=0912 python -m img_align.pipeline run --session 0912 \
 > 子プロセスやコンテナを起こすときは `config.SESSION` ではなく
 > **`config.SESSION_REF`** を渡すこと。`SESSION` は登録後の派生名なので、
 > env に戻すとレジストリに無くて落ちる。
+
+### Kubernetes / Dagster Pipes で回す
+
+**1ポッド = 1データセット**なら、パイプラインは**1プロセスで完結する**。
+`api.run()` は子プロセスを立てない。
+
+config の凍結 (`IMG_SESSION` を最初の import で固め、137箇所が値を束ねる) は
+「同一プロセス内で2つのデータセットが混ざる」事故を防ぐための仕組みで、
+**ポッド境界がすでにそれを担保している**。そこに子プロセスを足すと、
+下の SIGTERM の問題を1段増やすだけで得が無い。
+
+```python
+# ポッドの入口 (Dagster Pipes)
+from dagster_pipes import open_dagster_pipes
+
+with open_dagster_pipes() as pipes:
+    inp = pipes.get_extra("input")
+    from img_align import api          # ← ここで初めて import する
+    res = api.run(inp, steps=pipes.get_extra("steps"), segments="imu")
+    pipes.report_asset_materialization(
+        metadata={"session": res.session, "islands": len(res.islands)})
+```
+
+**入口の規則: `IMG_SESSION` が決まる前に `img_align.*` を import しない。**
+Pipes の入口モジュールは top-level で `img_align` を import せず、
+`open_dagster_pipes()` の中で import する。破った場合 `api.run()` は
+
+```
+RuntimeError: config は既に '0828' で凍結済みなので '/data/x' は回せない
+```
+
+で**落ちる** (黙って 28-AAAAA を読み始めたりはしない)。
+`api` / `steps` / `tools.recon` / `tools._hydra` は import しただけでは config を
+読まないよう保っており、`tests/check_imports.py` の「import衛生」が金床になっている。
+
+CLI をそのままポッドのコマンドにしてもよい。`exec` して PID 1 にできる。
+
+```
+python -m img_align.tools.recon run input=/data/reconstruction 'steps=[anchor]'
+```
+
+#### SIGTERM は PID 1 にしか来ない
+
+k8s はポッド終了時 PID 1 にだけ SIGTERM を送る。放っておくと入口だけ死んで
+**子孫が孤児化して走り続ける** — 実測で、GPU推論の subprocess
+(`core/panovggt.py`、別 env の python) とアンカーの `ProcessPoolExecutor`
+ワーカーが全部生き残った。GPU を掴んだまま `terminationGracePeriod` の
+SIGKILL を待つので、Dagster 側のキャンセルは成功したように見える。
+
+`core/signals.forward_to_process_group()` を CLI の入口で1回呼び、
+シグナルを**プロセスグループ全体**へ中継している (グループリーダーのときだけ)。
+`api.run()` をライブラリとして直接呼ぶ入口を自分で書くなら、**そこでも同じ
+ことをする**か、ポッドの `command` を CLI にすること。
+
+#### 並列数はポッドの CPU 割当に合わせる
+
+`anchor.jobs` の既定は `core/caps.cpus() // 4`。`cpus()` は
+cgroup v2 `cpu.max` → cgroup v1 `cpu.cfs_quota_us` → `sched_getaffinity` →
+`os.cpu_count()` の順で解決する。
+
+> **`os.cpu_count()` を直接使ってはいけない。** ノードのコア数を返すので、
+> CPU limit 付きのポッドでは桁違いの並列数になる (ノード64コア → 16並列、
+> 割当は4コア)。アンカーは島ごとに点群を読むので、そのまま OOMKilled になる。
+
+メモリが律速なら `anchor.jobs` を明示的に下げる。
+
+#### 同一プロセスから複数データセットを回したくなったら
+
+`api` に分岐を足さないこと。`tools/ext_batch.py` と同じく、
+`python -m img_align.tools.recon run input=...` を子プロセスで起こす。
+1プロセス1データセットという制約は `api` の都合ではなく config の構造なので、
+分岐で隠すと「どちらの経路を通ったか」で挙動が変わる種になる。
 
 ### 図面が無いとき (軌跡と点群だけ作る)
 
@@ -495,14 +570,15 @@ flowchart LR
 ```
 img_align/
   steps.py           **段の登録表と依存解決** (順序はここが決める)
-  api.py             外部から呼ぶ入口 (run / run_inprocess / plan)
+  api.py             外部から呼ぶ入口 (run / plan)。プロセス内で実行する
   pipeline.py        既存7セッション用の互換CLI (steps.py へ翻訳するだけ)
   config.py          物件レジストリ。IMG_SESSION はパスも受ける
   conf/
     recon.yaml         入力ディレクトリ実行の設定 (hydra)
     ext_batch.yaml     外部テストデータ大量実走の設定
   core/              前段: 入力→島
-    caps.py            入力から「何ができるか」を判定
+    caps.py            入力から「何ができるか」を判定 + 使える CPU 数
+    signals.py         入口が SIGTERM をプロセスグループへ中継する
     ingest.py          入力の imu/ を results へ取り込み (台帳つき)
     chunking.py        区間計画・チャンク窓・一括推論の呼び出し
     panovggt.py        PanoVGGT実行 (run_chunks)
@@ -593,4 +669,6 @@ python -m img_align.tests.check_imports /data/reconstruction   # 新しい入力
 | **1プロセス1データセット** | 約90モジュールが `from config import X` で値を束ねるので `reload` では戻らない。セッションを跨ぐなら必ずプロセス分離 |
 | **子には `SESSION_REF`** | `SESSION` は登録後の派生名。env に戻すとレジストリに無くて落ちる |
 | **アンカーには実寸も要る** | 壁注釈 (labelme) だけでは px→m が決まらない。`floors/meta.json` の `known_width_mm` が無いと `PlanGrid` が `TypeError` |
+| **SIGTERM は PID 1 にしか来ない** | 放置すると GPU推論の subprocess と fork ワーカーが孤児化して走り続ける (実測)。入口で `core/signals.forward_to_process_group()` を呼ぶ |
+| **`os.cpu_count()` はノードのコア数** | ポッドの CPU limit を見ないので 過剰並列 → OOMKilled。`core/caps.cpus()` を使う |
 | **IMU は台帳つきでコピー** | `imu_segments` は `exists()` しか見ないので、古いコピーが残ると入力を差し替えても永久に古い区間が使われる |
