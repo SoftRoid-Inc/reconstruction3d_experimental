@@ -10,26 +10,46 @@
 
 ## 1. 全体の流れ
 
+記号の約束: **角丸 = データ**(入力・中間成果物・出力) / **四角 = 処理**。
+
 ```mermaid
 flowchart TD
-    IMG["360°フレーム<br/>5376×2688"] --> MASK["人物マスク<br/>(付属 or seg_ade20k)"]
-    MASK --> CHUNK["チャンク分割<br/>16枚 / stride 12"]
-    CHUNK --> INFER["PanoVGGT 推論<br/>1036×518 / bf16<br/>9.4秒/チャンク"]
-    INFER --> CHAIN["チェーン連結<br/>chaining.chain()"]
-    INFER --> PG["ポーズグラフ<br/>posegraph (任意)"]
+    IMG(["360°フレーム<br/>5376×2688"]):::data
+    PLAN(["間取り図<br/>labelme GT"]):::data
+    IMU(["IMU / GT階ラベル"]):::data
 
-    SEG["区間計画<br/>IMU階段検出 or GT階ラベル"] --> CHUNK
-    CHAIN --> ISL["島<br/>frontend_bench/&lt;tag&gt;/"]
-    PG --> ISL
+    MASK["人物マスク生成<br/>seg_ade20k"]:::proc
+    MASKD(["人物マスク"]):::data
+    SEG["区間計画<br/>階段検出 or 階ラベル"]:::proc
+    CHUNK["チャンク分割<br/>16枚 / stride 12"]:::proc
+    INFER["PanoVGGT 推論<br/>1036×518 / bf16<br/>9.4秒/チャンク"]:::proc
+    CHUNKD(["チャンク<br/>姿勢 + 点群"]):::data
+    CHAIN["チェーン連結<br/>chaining.chain"]:::proc
+    PG["ポーズグラフ<br/>posegraph (任意)"]:::proc
+    ISL(["島<br/>frontend_bench/&lt;tag&gt;/"]):::data
+    BRIDGE["島間接続<br/>bridge / island_group"]:::proc
+    GRP(["群れ"]):::data
+    DENS["密度地図づくり<br/>壁の高さ帯で絞る"]:::proc
+    DENSD(["密度地図"]):::data
+    ANCHOR["図面アンカー<br/>コーナーRANSAC + 壁ICP"]:::proc
+    OUT(["図面座標の軌跡<br/>+ 整列点群"]):::data
 
-    ISL --> DENS["密度地図<br/>壁の高さ帯で絞る"]
-    PLAN["間取り図<br/>labelme GT"] --> DENS
-    DENS --> ANCHOR["図面アンカー<br/>コーナーRANSAC + 壁ICP"]
-    ANCHOR --> OUT["図面座標の軌跡<br/>+ 整列点群"]
+    IMG --> MASK --> MASKD --> CHUNK
+    IMG --> CHUNK
+    IMU --> SEG --> CHUNK
+    CHUNK --> INFER --> CHUNKD
+    CHUNKD --> CHAIN --> ISL
+    CHUNKD --> PG --> ISL
+    ISL --> DENS --> DENSD --> ANCHOR
+    PLAN --> ANCHOR
+    ANCHOR --> OUT
+    ISL -.-> BRIDGE -.-> GRP -.-> ANCHOR
 
-    ISL -.橋渡し.-> BRIDGE["島間接続<br/>bridge / island_group"]
-    BRIDGE -.-> ANCHOR
+    classDef data fill:#e8f0fe,stroke:#4a76c8,stroke-width:1.5px,color:#13305e
+    classDef proc fill:#fff3e0,stroke:#c8792a,stroke-width:1.5px,color:#5e3a13
 ```
+
+点線は**既定では通らない経路**(橋渡しは `--post bridge` を明示したときだけ)。
 
 ### 用語
 
@@ -134,14 +154,26 @@ python -m img_align.tools.ext_batch report            # 集計
 
 ```mermaid
 flowchart LR
-    subgraph N["件 N"]
-        DL2["S3取込<br/>(先読み)"]
+    S3(["S3<br/>画像 + マスク + GT"]):::data
+    subgraph NET["ネットワーク (件 N を先読み)"]
+        DL["S3取込<br/>82秒"]:::proc
     end
-    subgraph C["件 N-1 (処理中)"]
-        INF["推論+チェーン<br/>357秒"] --> PG2["ポーズグラフ<br/>32秒"]
-        PG2 --> EV["評価<br/>0.4秒"] --> DEL["素材を削除"]
+    subgraph GPU["GPU (件 N-1 を処理)"]
+        INF["推論+チェーン<br/>357秒"]:::proc
+        PG2["ポーズグラフ<br/>32秒"]:::proc
+        EV["評価<br/>0.4秒"]:::proc
+        INF --> PG2 --> EV
     end
-    DL2 -. ネットワーク .-> C
+    RES(["result.json<br/>数十KB"]):::data
+    DEL["素材を削除<br/>images/ masks/ pcd/"]:::proc
+
+    S3 --> DL
+    DL -. 次の件として待機 .-> INF
+    EV --> RES
+    EV --> DEL
+
+    classDef data fill:#e8f0fe,stroke:#4a76c8,stroke-width:1.5px,color:#13305e
+    classDef proc fill:#fff3e0,stroke:#c8792a,stroke-width:1.5px,color:#5e3a13
 ```
 
 ### ディスクが律速 → 1件ずつ片付ける
