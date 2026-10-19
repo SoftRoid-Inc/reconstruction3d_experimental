@@ -12,7 +12,7 @@ import json
 from img_align.config import BENCH_DIR
 from img_align.core.chaining import chain_and_save
 from img_align.config import FRAMES_DIR, SESSION
-from img_align.core.panovggt import PCD_DIR, run_panovggt, select_entries
+from img_align.core.panovggt import PCD_DIR, select_entries
 
 CHUNK_SIZE = 16
 CHUNK_STRIDE = 12          # 重なり = CHUNK_SIZE - CHUNK_STRIDE = 4フレーム
@@ -220,9 +220,16 @@ def infer_chunks(model, windows, needed, chunks_dir, entries):
         print(f"[pv] {len(miss)} チャンクを一括推論", flush=True)
         run_chunks(miss, entries, chunks_dir, use_mask=True)
         return
-    # Pi3系はコンテナ内でしか動かない。モデル読み込みを1回で済ませるため
-    # 欠落チャンクをまとめて1プロセスに渡す
+    # Pi3系は**別の**コンテナ (pi3) でしか動かないので、ホストから
+    # `docker compose exec` で叩く。img_align イメージの中からは叩けない
+    import os
     import subprocess
+    if os.path.exists("/.dockerenv"):
+        raise SystemExit(
+            f"--model {model} はコンテナの中からは使えない "
+            "(pi3 コンテナを docker compose exec で起こす経路のため)。\n"
+            "  ホストから実行するか、--model pv を使ってください "
+            "(モデル比較の結論: Pi3系に乗り換える理由は無い)")
     spec = ",".join(f"{k}:{a}:{b}" for k, a, b in miss)
     print(f"[{model}] {len(miss)} チャンクを pi3 コンテナで推論", flush=True)
     subprocess.run(

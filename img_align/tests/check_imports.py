@@ -84,7 +84,7 @@ CLEAN_IMPORTS = ("img_align.api", "img_align.steps", "img_align.tools.recon",
                  "img_align.tools._hydra")
 
 _CLEAN_CODE = """
-import importlib, json, sys
+import importlib, importlib.util, json, sys, pathlib
 bad = []
 for m in %r:
     try:
@@ -94,6 +94,17 @@ for m in %r:
         continue
     if "img_align.config" in sys.modules:
         bad.append([m, "import しただけで config が凍結した"])
+# ポッドの ENTRYPOINT。パッケージ外なのでファイルから読み込んで確かめる
+p = pathlib.Path(%r) / "main.py"
+spec = importlib.util.spec_from_file_location("__entry_probe__", p)
+mod = importlib.util.module_from_spec(spec)
+try:
+    spec.loader.exec_module(mod)
+except Exception as e:
+    bad.append(["main.py", f"import 自体が失敗: {type(e).__name__}: {e}"])
+else:
+    if "img_align.config" in sys.modules:
+        bad.append(["main.py", "import しただけで config が凍結した"])
 print(json.dumps(bad, ensure_ascii=False))
 """
 
@@ -105,7 +116,8 @@ def clean_imports():
     「env 未設定のまま凍結」なので、env を立てたまま検査すると意味がない。
     """
     return [tuple(r) for r in
-            run_json(_CLEAN_CODE % (list(CLEAN_IMPORTS),), session=None)]
+            run_json(_CLEAN_CODE % (list(CLEAN_IMPORTS), str(ROOT)),
+                     session=None)]
 
 
 def main():
@@ -126,7 +138,7 @@ def main():
 
     dirty = clean_imports()
     print(f"[{'OK' if not dirty else 'NG'}] import衛生: "
-          f"{len(CLEAN_IMPORTS)}入口が config を巻き込まないこと")
+          f"{len(CLEAN_IMPORTS) + 1}入口 (+ main.py) が config を巻き込まないこと")
     for m, why in dirty:
         print(f"    {m}: {why}")
     rc |= bool(dirty)

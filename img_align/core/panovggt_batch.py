@@ -1,57 +1,82 @@
 """PanoVGGTを複数チャンクまとめて推論する (モデル読み込みを1回に)
 
-`inference.py` をチャンクごとにsubprocess起動すると、1チャンク22秒のうち
+`inference.py` をチャンクごとに起動すると、1チャンク22秒のうち
 **12.2秒がプロセス起動とモデル読み込み**で占められる (2026-10-14実測)。
 16フレームの実推論は9秒しかないので、固定コストが55%の無駄になっていた。
 
 ここでは inference.py を**モジュールとしてimportし、`load_model` を
 読み込み済みモデルを返す関数に差し替える**ことで、第三者コードを一切
-改変せずにモデル読み込みを1回に抑える。`main()` の出力形式は変わらない。
+改変せずにモデル読み込みを1回に抑える。出力形式は変わらない。
 
-このスクリプトは **panovggt env のpythonで** 実行する (core/panovggt.PANOVGGT_PY)。
-呼び出し側は `core.panovggt.run_chunks()`。
-
-使い方 (通常は run_chunks 経由):
-  <panovggt_py> -m img_align.core.panovggt_batch --spec <jsonファイル>
-spec: [{"image_dir":…, "mask_dir":…|null, "output_dir":…}, …]
+呼び出し側は `core.panovggt.run_chunks()` / `run_panovggt()`。
+かつては専用 conda env の subprocess だったが、単一イメージ化で
+**同一プロセス実行だけ**になった (2026-10-19)。
 """
 import argparse
-import json
+import contextlib
 import os
 import sys
 import time
 
+_MODEL = {}          # (dir, config, ckpt, device) -> 読み込み済みモデル
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--spec", required=True, help="チャンク定義のJSONファイル")
-    ap.add_argument("--panovggt-dir", required=True)
-    ap.add_argument("--config", default="training/config/default.yaml")
-    ap.add_argument("--checkpoint", default="checkpoints/model.pt")
-    ap.add_argument("--device", default="cuda")
-    args = ap.parse_args()
 
-    os.chdir(args.panovggt_dir)          # 相対パスの重み・設定を参照するため
-    sys.path.insert(0, args.panovggt_dir)
+@contextlib.contextmanager
+def _in_panovggt(panovggt_dir):
+    """PanoVGGT のディレクトリを cwd と sys.path に入れる
+
+    inference.py は相対パスで重み・設定を引くので chdir が要る。
+    **同一プロセスなので必ず戻す** — subprocess 時代は無害だったが、
+    戻さないと後続の段 (チェーン・アンカー) が相対パスを見失う。
+    """
+    cwd = os.getcwd()
+    path = str(panovggt_dir)
+    added = path not in sys.path
+    if added:
+        sys.path.insert(0, path)
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(cwd)
+        if added and sys.path and sys.path[0] == path:
+            sys.path.pop(0)
+
+
+def _load(panovggt_dir, config, checkpoint, device):
+    """モデルを読み込む (同じ組み合わせなら使い回す)"""
+    key = (str(panovggt_dir), config, checkpoint, device)
+    if key in _MODEL:
+        return _MODEL[key]
     import inference as inf
-
     t0 = time.time()
-    model = inf.load_model(args.config, args.checkpoint, args.device)
-    # 以降 main() が呼ぶ load_model は読み込み済みモデルを返す
-    inf.load_model = lambda *a, **k: model
+    _MODEL[key] = inf.load_model(config, checkpoint, device)
     print(f"[batch] モデル読み込み {time.time() - t0:.1f}秒", flush=True)
-
-    chunks = json.loads(open(args.spec).read())
-    for i, c in enumerate(chunks):
-        t = time.time()
-        ns = argparse.Namespace(
-            config=args.config, checkpoint=args.checkpoint,
-            image_dir=c["image_dir"], mask_dir=c.get("mask_dir"),
-            output_dir=c["output_dir"], device=args.device, log_depth=True)
-        inf.main(ns)
-        print(f"[batch] {i + 1}/{len(chunks)} {time.time() - t:.1f}秒",
-              flush=True)
+    return _MODEL[key]
 
 
-if __name__ == "__main__":
-    main()
+def run_spec(chunks, panovggt_dir, config, checkpoint, device="cuda"):
+    """チャンク定義のリストを順に推論する
+
+    chunks: [{"image_dir":…, "mask_dir":…|None, "output_dir":…}, …]
+    """
+    if not chunks:
+        print("[batch] 推論すべきチャンクなし")
+        return
+    with _in_panovggt(panovggt_dir):
+        import inference as inf
+        model = _load(panovggt_dir, config, checkpoint, device)
+        orig_load = inf.load_model
+        inf.load_model = lambda *a, **k: model
+        try:
+            for i, c in enumerate(chunks):
+                t = time.time()
+                inf.main(argparse.Namespace(
+                    config=config, checkpoint=checkpoint,
+                    image_dir=c["image_dir"], mask_dir=c.get("mask_dir"),
+                    output_dir=c["output_dir"], device=device,
+                    log_depth=True))
+                print(f"[batch] {i + 1}/{len(chunks)} {time.time() - t:.1f}秒",
+                      flush=True)
+        finally:
+            inf.load_model = orig_load

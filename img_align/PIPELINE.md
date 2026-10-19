@@ -205,23 +205,25 @@ flowchart LR
 
 ### 外部入力ディレクトリから (本番)
 
-CLIは **typer**、設定は **hydra** (`img_align/conf/recon.yaml`)。
+入口は **`main.py`** (イメージの ENTRYPOINT)。CLIは **typer**、設定は
+**hydra** (`img_align/conf/recon.yaml`)。実体は `img_align/tools/recon.py`。
 
 ```bash
 # まず入力を点検する (何が走って何がskipされるか。実行はしない)
-python -m img_align.tools.recon inspect input=/data/reconstruction
+python main.py inspect input=/data/reconstruction
 
 # 前半: 推論とチェーン。この裏で人が階を割り当てる
-python -m img_align.tools.recon run input=/data/reconstruction 'steps=[chains]'
+#   **GPU段はイメージの中でだけ動く** (下の「単一イメージ」を参照)
+docker compose exec img_align python main.py run \
+    input=/data/reconstruction 'steps=[chains]'
 
 # 階割当の雛形を作って results/<session>/backend/floor_assign.json を編集
 IMG_SESSION=/data/reconstruction python -m img_align.core.floor_assign --template
 
-# 後半: アンカーから出力まで (prep/chains は済んでいるので安い)
-python -m img_align.tools.recon run input=/data/reconstruction \
-    'steps=[anchor,export]'
+# 後半: アンカーから出力まで (既存チャンクを使うのでホストでも動く)
+python main.py run input=/data/reconstruction 'steps=[anchor,export]'
 
-python -m img_align.tools.recon steps      # 段の一覧と依存関係
+python main.py steps      # 段の一覧と依存関係
 ```
 
 設定は `key=value` でその場上書きできる。
@@ -251,7 +253,7 @@ print(res.results_dir, res.islands, res.skipped)
 ### 既存7セッション (開発用CLI)
 
 `pipeline.py` は引数を `steps.py` のオプションへ翻訳するだけの互換CLI。
-21島の開発フローと `ext_batch` の156件がこれに乗っている。
+21島の開発フローがこれに乗っている。
 
 ```bash
 IMG_SESSION=0912 python -m img_align.pipeline run --session 0912 \
@@ -266,8 +268,8 @@ IMG_SESSION=0912 python -m img_align.pipeline run --session 0912 \
 
 ### IMG_SESSION が受け付ける3つの形
 
-環境変数は**1本だけ**。別変数を足すと `tools/ext_batch.py` の
-`{**os.environ, "IMG_SESSION": sess}` から全件に漏れ、「両方セットされたとき
+環境変数は**1本だけ**。別変数を足すと、子プロセスへ環境を丸ごと渡す経路
+(`{**os.environ, "IMG_SESSION": sess}`) から漏れるし、「両方セットされたとき
 どちらが勝つか」という曖昧さも生まれる。
 
 | 形 | 意味 |
@@ -279,6 +281,43 @@ IMG_SESSION=0912 python -m img_align.pipeline run --session 0912 \
 > 子プロセスやコンテナを起こすときは `config.SESSION` ではなく
 > **`config.SESSION_REF`** を渡すこと。`SESSION` は登録後の派生名なので、
 > env に戻すとレジストリに無くて落ちる。
+
+### 単一イメージ (`reconstruction_3d/Dockerfile`)
+
+**PanoVGGT 推論から図面アンカー・書き出しまで、ぜんぶ同じプロセスで走る。**
+以前は PanoVGGT だけ専用 conda env の subprocess だったが、Docker 外で
+実行しない方針になったので1環境に寄せた (2026-10-19)。
+
+```bash
+docker compose build img_align
+# ローカル: マウントした編集中のコードで動く (compose が working_dir を設定ずみ)
+docker compose exec img_align python main.py run input=/data/reconstruction
+# 焼いたコードで動かす (k8s と同じ経路を確かめたいとき)
+docker compose exec -w /opt/img_align img_align python main.py run input=...
+```
+
+| 項目 | 中身 |
+|---|---|
+| base | `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime` (PanoVGGT が torch 2.5 系を要求) |
+| PanoVGGT | `/opt/panovggt` に sha 固定で clone (MIT) |
+| コード | `img_align/` `recon3d/` `main.py` を `/opt/img_align` へ COPY。**焼いたコードが動く** — `python main.py` は sys.path[0] にスクリプトのディレクトリを置くので PYTHONPATH では上書きできない。ローカルで編集中のコードを使うときは compose の `working_dir: /code2/reconstruction_3d` 側で動かす |
+| 重み | **焼かない** (3.9GB)。`PANOVGGT_CKPT` で指す。ローカルは `/home/maren/models`、k8s は PVC / initContainer |
+| 入れていないもの | `seg_ade20k`(人物マスク生成=外部供給) / `mesh/*`(open3d) / `gs/*`(gsplat) / pi3・holo(別コンテナ) |
+
+> **`PANOVGGT_DIR` が未設定なら推論段で止まる。** 開発ホストの python には
+> torch 2.9.1 が入っていて `import inference` が**通ってしまう**が、
+> PanoVGGT が想定するのは 2.5 系。「動くが結果が違う」を防ぐため、
+> イメージだけがこの変数を持つようにしてある。
+> 既存チャンクを使う段 (posegraph / anchor / export / 評価) は GPU も
+> PanoVGGT も要らないので、ホストのままで動く。
+
+> **`reconstruction_3d` は 188GB** (28-BBBBB だけで155GB)。
+> `.dockerignore` が `img_align/` `recon3d/` `main.py` だけに絞っている。
+> 外すとビルドが終わらない。
+
+> **コンテナが書いたファイルは root 所有**になる (他のサービスと同じ)。
+> ホストから消せないときはコンテナの中から消すか、
+> `docker compose exec img_align chown -R 1001:1001 /code2/reconstruction_3d`。
 
 ### Kubernetes / Dagster Pipes で回す
 
@@ -347,8 +386,8 @@ cgroup v2 `cpu.max` → cgroup v1 `cpu.cfs_quota_us` → `sched_getaffinity` →
 
 #### 同一プロセスから複数データセットを回したくなったら
 
-`api` に分岐を足さないこと。`tools/ext_batch.py` と同じく、
-`python -m img_align.tools.recon run input=...` を子プロセスで起こす。
+`api` に分岐を足さないこと。`python main.py run input=...` を
+子プロセスで起こす。
 1プロセス1データセットという制約は `api` の都合ではなく config の構造なので、
 分岐で隠すと「どちらの経路を通ったか」で挙動が変わる種になる。
 
@@ -387,29 +426,25 @@ IMG_SESSION=0912 python -m img_align.core.posegraph \
     --from-tag pv0912_s001 --tag pg12_pv0912_s001
 ```
 
-### 外部テストデータの大量実走
+### 外部テストデータ (ホールドアウト)
 
-CLIは **typer**、設定は **hydra** (`img_align/conf/ext_batch.yaml`)。
-
-```bash
-python -m img_align.tools.ext_batch list      # 候補を見る
-python -m img_align.tools.ext_batch run       # 実走
-python -m img_align.tools.ext_batch report    # 集計
-```
-
-設定は `key=value` でその場上書きできる。
+`polish-pipeline/scripts/sfm_testdataset` 由来の 240件 (INSTA 156件) を
+`ext/sfmXXXX/` に取り込んである。**入力ディレクトリ渡しになったので
+そのまま `input=` に渡せる** (専用の一括実走ドライバは 2026-10-19 に撤去した)。
 
 ```bash
-... run select.limit=20 select.skip=10        # 件数と開始位置
-... run pipeline.stride=10 pipeline.chunk_size=24   # チャンク設定を変えて比較
-... run run.keep_chunks=true                  # 素材を消さない (デバッグ時)
-... run --config-name ext_batch_long          # 設定ファイルごと差し替え
+python main.py inspect input=ext/sfm11196
+python main.py run     input=ext/sfm11196 'steps=[chains]'
 ```
 
-`polish-pipeline/scripts/sfm_testdataset` の240件(INSTA 156件)を
-取り込み→推論→チェーン→ポーズグラフ→評価まで通す。
-**実走した `pipeline` 設定は `result.json` に埋め込まれる**ので、
-どの条件で得た数字かが結果自体から追える。
+セッション名は `ext/sfmXXXX/meta.json` の `session` (例 `e11196`) が使われ、
+出力は従来どおり `ext/sfmXXXX/results/e11196/`。過去の評価結果の集計は
+`out/ext_report.py` に残してある。
+
+> **図面の壁アノテーションが無い**ので図面アンカーは評価できない。
+> GT軌跡だけで測れるもの (島の形状品質・橋渡し・カバレッジ) に限られる。
+> **ディスクが律速**: 1件あたり画像0.4GB + チャンク13GB。評価が済んだら
+> `results/<sess>/pcd/` と `images/` を消すこと。
 
 ---
 
@@ -505,67 +540,12 @@ python -m img_align.tools.ext_batch report    # 集計
 
 > ここに書いた値は**入口で型検査される**。`known_width_mm` に文字列が入ると
 > `PlanGrid` が `TypeError` を出し、その例外は図面を読む瞬間に飛ぶので
-> 原因が分かりにくい。`ext_batch` が書く `s3key` / `n_frames` などの
+> 原因が分かりにくい。`ext/` の meta.json にある `s3key` / `n_frames` などの
 > 覚え書きキーは素通りする。
 
-### 大量実走の設定
-
-外部テストデータの一括実行は別ファイル `img_align/conf/ext_batch.yaml`
-(取り込み元・選別条件・素材の後始末)。次節を参照。
-
 ---
 
-## 6. 大量実走の設計
-
-```mermaid
-flowchart LR
-    S3(["S3<br/>画像 + マスク + GT"]):::data
-    subgraph NET["ネットワーク (件 N を先読み)"]
-        DL["S3取込<br/>82秒"]:::proc
-    end
-    subgraph GPU["GPU (件 N-1 を処理)"]
-        INF["推論+チェーン<br/>357秒"]:::proc
-        PG2["ポーズグラフ<br/>32秒"]:::proc
-        EV["評価<br/>0.4秒"]:::proc
-        INF --> PG2 --> EV
-    end
-    RES(["result.json<br/>数十KB"]):::data
-    DEL["素材を削除<br/>images/ masks/ pcd/"]:::proc
-
-    S3 --> DL
-    DL -. 次の件として待機 .-> INF
-    EV --> RES
-    EV --> DEL
-
-    classDef data fill:#e8f0fe,stroke:#4a76c8,stroke-width:1.5px,color:#13305e
-    classDef proc fill:#fff3e0,stroke:#c8792a,stroke-width:1.5px,color:#5e3a13
-```
-
-### ディスクが律速 → 1件ずつ片付ける
-1件あたり画像0.4GB + チャンク13GB。156件を残したら2TBになる。
-必要なのは**結果JSON(数十KB)とチェーン(13KB/島)だけ**なので、評価が済んだら
-`images/` `masks/` `pcd/` を消す。ピークは常に1件分。
-
-### 計算時間の内訳(実測 388枚5フロア = 471秒)
-
-| 工程 | 秒 | 割合 | 最適化 |
-|---|---|---|---|
-| **推論+チェーン** | **357** | **76%** | バッチ推論済み(22→9.4秒/チャンク) |
-| **取込 (S3)** | **82** | **17%** | **先読みで0秒に**(GPUと別資源) |
-| ポーズグラフ | 32 | 7% | — |
-| 評価 | 0.4 | 0% | — |
-
-**先読み後は1件 約6.5分**。156件で約17時間。
-
-> **実測してから最適化すること。** 当初「subprocessの起動が重い」と見込んだが
-> 実測は**0.28秒**で無視できた。的を外すところだった。
-
-### 再開可能
-`<dir>/result.json` があればskip。中断しても続きから走る。
-
----
-
-## 7. パッケージ構成
+## 6. パッケージ構成
 
 ```
 img_align/
@@ -575,7 +555,6 @@ img_align/
   config.py          物件レジストリ。IMG_SESSION はパスも受ける
   conf/
     recon.yaml         入力ディレクトリ実行の設定 (hydra)
-    ext_batch.yaml     外部テストデータ大量実走の設定
   core/              前段: 入力→島
     caps.py            入力から「何ができるか」を判定 + 使える CPU 数
     signals.py         入口が SIGTERM をプロセスグループへ中継する
@@ -613,8 +592,8 @@ img_align/
     pg_report.py       ポーズグラフ比較レポート
   tools/
     recon.py           **入力ディレクトリから回すCLI** (typer + hydra)
+                       — 入口は リポジトリ直下の main.py
     _hydra.py          hydra設定読み込みの共通部
-    ext_batch.py       外部データの大量実走
     align_tool.py      軌跡を手で図面に登録する
   tests/             pytest 無しでも走る素のスクリプト
     check_config.py    全セッションの config 凍結値スナップショット
@@ -639,7 +618,7 @@ python -m img_align.tests.check_imports /data/reconstruction   # 新しい入力
 
 ---
 
-## 8. 現在の到達点
+## 7. 現在の到達点
 
 | 指標 | 値 |
 |---|---|
@@ -654,7 +633,7 @@ python -m img_align.tests.check_imports /data/reconstruction   # 新しい入力
 
 ---
 
-## 9. 落とし穴 (実際に踏んだもの)
+## 8. 落とし穴 (実際に踏んだもの)
 
 | 事項 | 内容 |
 |---|---|
@@ -669,6 +648,8 @@ python -m img_align.tests.check_imports /data/reconstruction   # 新しい入力
 | **1プロセス1データセット** | 約90モジュールが `from config import X` で値を束ねるので `reload` では戻らない。セッションを跨ぐなら必ずプロセス分離 |
 | **子には `SESSION_REF`** | `SESSION` は登録後の派生名。env に戻すとレジストリに無くて落ちる |
 | **アンカーには実寸も要る** | 壁注釈 (labelme) だけでは px→m が決まらない。`floors/meta.json` の `known_width_mm` が無いと `PlanGrid` が `TypeError` |
+| **`.dockerignore` が無いとビルドが死ぬ** | `reconstruction_3d` は188GB。build context をコードだけに絞る |
+| **`os.chdir` は同一プロセスに残る** | PanoVGGT は相対パスで重みを引くので chdir が要る。subprocess 時代は無害だったが、戻さないと後続の段が 相対パスを見失う (`panovggt_batch._in_panovggt` が try/finally で戻す) |
 | **SIGTERM は PID 1 にしか来ない** | 放置すると GPU推論の subprocess と fork ワーカーが孤児化して走り続ける (実測)。入口で `core/signals.forward_to_process_group()` を呼ぶ |
 | **`os.cpu_count()` はノードのコア数** | ポッドの CPU limit を見ないので 過剰並列 → OOMKilled。`core/caps.cpus()` を使う |
 | **IMU は台帳つきでコピー** | `imu_segments` は `exists()` しか見ないので、古いコピーが残ると入力を差し替えても永久に古い区間が使われる |

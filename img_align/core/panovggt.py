@@ -1,34 +1,62 @@
 """PanoVGGTで360°フレームから点群+カメラ姿勢を推定する (SceneAligner-lite 前段)
 
-third_party/PanoVGGT の inference.py (無改変) を専用conda env `panovggt` で
-subprocess実行する。撮影者は手法A(seg_ade20k)のpersonマスクで除外する
-(PanoVGGTのマスク仕様: 黒=無効)。
+PanoVGGT の inference.py (無改変) を**同一プロセスで**呼ぶ。撮影者は
+人物マスクで除外する (PanoVGGTのマスク仕様: 黒=無効)。
+
+かつては専用 conda env の subprocess だったが、単一 Docker イメージ化で
+不要になった (2026-10-19)。推論段は `img_align` イメージの中でだけ動く。
 
 出力: results/pcd/points.ply (統合点群) / cameras.npz (姿勢+フレームID)
 """
 import argparse
 import json
 import os
-import subprocess
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
 from scipy import ndimage
 
 from img_align.core.io_ply import read_ply_xyzrgb
-from img_align.config import (FRAMES_DIR, GROUP_IDS, PROJECT_ROOT, PROP,
-                              RESULTS_DIR, THIRD_PARTY, frame_name)
+from img_align.config import (FRAMES_DIR, GROUP_IDS, PROP, RESULTS_DIR,
+                              frame_name)
 from img_align.legacy.sample_frames import load_selected
 
 PCD_DIR = RESULTS_DIR / "pcd"
 INPUT_DIR = PCD_DIR / "input"
 MASK_DIR = PCD_DIR / "input_mask"
-PANOVGGT_DIR = THIRD_PARTY / "PanoVGGT"
 PANOVGGT_OUT = PCD_DIR / "panovggt_out"
-# env内pythonを絶対パスで直接起動する。`conda run -n panovggt python` は
-# 呼び出し側のPATH (pyenv等) に負けて別のpythonが起動することがあり、
-# env側のsite-packagesが一切載らずImportErrorになる (2026-10-07に実際に発生)
-PANOVGGT_PY = "/home/maren/miniconda3/envs/panovggt/bin/python"
+
+PANOVGGT_CONFIG = os.environ.get("PANOVGGT_CONFIG",
+                                 "training/config/default.yaml")
+
+
+def _panovggt_paths():
+    """(PanoVGGTディレクトリ, 重み) を返す。使えなければ SystemExit
+
+    **`PANOVGGT_DIR` を持つのはイメージだけ** (Dockerfile が設定する)。
+    未設定なら推論段で止める — 開発ホストの python には torch 2.9.1 が
+    入っていて `import inference` が**通ってしまう**が、PanoVGGT が想定
+    するのは 2.5 系。「動くが結果が違う」が一番まずいので入口で止める。
+    """
+    d = os.environ.get("PANOVGGT_DIR")
+    if not d:
+        raise SystemExit(
+            "PANOVGGT_DIR が未設定: 推論段は img_align イメージ内で"
+            "実行してください\n"
+            "  docker compose exec img_align python main.py run input=...\n"
+            "(既存チャンクを使う段 — posegraph / anchor / export / 評価 — は"
+            "ホストのままで動きます)")
+    d = Path(d)
+    ckpt = Path(os.environ.get("PANOVGGT_CKPT",
+                               d / "checkpoints" / "model.pt"))
+    if not ckpt.exists():
+        raise SystemExit(
+            f"PanoVGGT の重みが無い: {ckpt}\n"
+            "  PANOVGGT_CKPT で場所を指すか、"
+            f"{d / 'checkpoints'} へボリュームをマウントしてください")
+    return d, str(ckpt)
+
 
 PERSON_DILATE_ITER = 12   # personマスクの膨張 (境界の取りこぼし対策)
 NADIR_INVALID_FRAC = 0.07  # 画像下端の無効帯 (自撮り棒・手元)
@@ -110,6 +138,13 @@ def local_floor_height(ply_path):
 
 
 
+def _infer(chunks):
+    """PanoVGGT 推論の唯一の入口 (同一プロセス。モデル読み込みは1回)"""
+    from img_align.core.panovggt_batch import run_spec
+    pdir, ckpt = _panovggt_paths()
+    run_spec(chunks, pdir, PANOVGGT_CONFIG, ckpt)
+
+
 def run_panovggt(entries, out_dir, use_mask=True):
     """フレーム集合に対してPanoVGGT推論を実行し、out_dir に標準形式で保存する"""
     input_dir = out_dir / "input"
@@ -118,17 +153,9 @@ def run_panovggt(entries, out_dir, use_mask=True):
     names, n_masks = prepare_inputs(entries, input_dir, mask_dir, use_mask)
     print(f"{len(names)} frames prepared -> {out_dir}")
 
-    cmd = [
-        PANOVGGT_PY, "inference.py",
-        "--config", "training/config/default.yaml",
-        "--checkpoint", "checkpoints/model.pt",
-        "--image_dir", str(input_dir),
-        "--output_dir", str(vggt_out),
-    ]
-    if n_masks:
-        cmd += ["--mask_dir", str(mask_dir)]
-    print("+", " ".join(cmd))
-    subprocess.run(cmd, cwd=PANOVGGT_DIR, check=True)
+    _infer([{"image_dir": str(input_dir),
+             "mask_dir": str(mask_dir) if n_masks else None,
+             "output_dir": str(vggt_out)}])
 
     xyz, _ = read_ply_xyzrgb(vggt_out / "pointclouds" / "merged.ply")
     poses = np.load(vggt_out / "poses" / "all_poses.npy")  # (S,4,4)
@@ -157,10 +184,9 @@ def run_chunks(windows, entries, chunks_dir, use_mask=True):
 
     windows: [(k, a, b)] — k=チャンク番号、[a:b) がフレーム範囲。
     既に cameras.npz があるチャンクはスキップするので中断・再開できる。
-    1チャンクずつ subprocess を起動すると固定コスト12.2秒が毎回かかるため
+    1チャンクずつモデルを読み直すと固定コスト12.2秒が毎回かかるため
     (実推論は16フレームで9秒)、panovggt_batch にまとめて渡す。
     """
-    import tempfile
     todo, names_of = [], {}
     for k, a, b in windows:
         cdir = PCD_DIR / chunks_dir / f"chunk_{k:02d}"
@@ -176,15 +202,8 @@ def run_chunks(windows, entries, chunks_dir, use_mask=True):
     if not todo:
         print("[batch] 推論すべきチャンクなし")
         return
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-        json.dump(todo, f)
-        spec = f.name
-    print(f"[batch] {len(todo)} チャンクを1プロセスで推論", flush=True)
-    subprocess.run([PANOVGGT_PY, "-m", "img_align.core.panovggt_batch",
-                    "--spec", spec, "--panovggt-dir", str(PANOVGGT_DIR)],
-                   check=True, env={**os.environ,
-                                    "PYTHONPATH": str(PROJECT_ROOT)})
-    os.unlink(spec)
+    print(f"[batch] {len(todo)} チャンクを推論", flush=True)
+    _infer(todo)
     for k, a, b in windows:
         if k in names_of:
             _collect(PCD_DIR / chunks_dir / f"chunk_{k:02d}", names_of[k])

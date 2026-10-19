@@ -4,7 +4,7 @@
 単体ATE 0.009mなので、全区間平均では差が出ないため。窓の定義は
 `eval/chunk_cmp.BREAKDOWN` (破綻) と `CONTROL` (同セッションの健全区間)。
 
-PanoVGGTはホストのconda env、Pi3系はpi3コンテナと実行先が違うので、
+PanoVGGTはimg_alignイメージ、Pi3系はpi3コンテナと実行先が違うので、
 このドライバはホストで起動し、Pi3側は `docker compose exec` で投げる。
 既に出力があるタグはスキップするので中断・再開できる。
 
@@ -44,7 +44,7 @@ def out_exists(sess, tag):
 
 
 def run_pv(sess, a, b, tag):
-    """PanoVGGTはホストのconda envで動く (core.panovggt が面倒を見る)"""
+    """PanoVGGTはimg_alignイメージ内で動く (core.panovggt が面倒を見る)"""
     subprocess.run(["python", "-m", "img_align.core.panovggt",
                     "--tag", tag, "--frames", f"{a}:{b + 1}:1"],
                    check=True, env={**_env(sess)})

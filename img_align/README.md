@@ -17,12 +17,14 @@ reconstruction/
   results/<session>/                 ← 出力はここだけ
 ```
 
+入口は**リポジトリ直下の `main.py`** (Docker イメージの ENTRYPOINT)。
+
 ```bash
-python -m img_align.tools.recon inspect input=/data/reconstruction  # 点検
-python -m img_align.tools.recon run     input=/data/reconstruction
-python -m img_align.tools.recon run     input=/data/reconstruction \
+python main.py inspect input=/data/reconstruction          # 点検
+python main.py run     input=/data/reconstruction
+python main.py run     input=/data/reconstruction \
     'steps=[anchor,export]' chunking.chunk_size=24
-python -m img_align.tools.recon steps                               # 段の一覧
+python main.py steps                                       # 段の一覧
 ```
 
 **段の順序は書いた順ではなく依存で決まる** (`steps.py`)。選んだ段の前提は
@@ -50,8 +52,26 @@ python -m img_align.pipeline run --session 0616 --post anchor,hier,export,viewer
 python -m img_align.pipeline stages   # 段の説明
 ```
 
-実行環境: ホスト conda env `img_align`(PanoVGGT推論は内部で env `panovggt` を
-subprocess 起動)。`mapany` 後処理のみ docker サービス `mapanything` 内で実行。
+実行環境: **単一 Docker イメージ** (`reconstruction_3d/Dockerfile`、
+compose サービス `img_align`)。PanoVGGT 推論から図面アンカーまで同一プロセスで走る。
+
+```bash
+docker compose build img_align
+docker compose exec img_align python main.py run input=/data/reconstruction
+```
+
+> ローカルでは compose が `working_dir: /code2/reconstruction_3d` を設定して
+> いるので**マウントした編集中のコード**が動く。イメージに焼いた
+> `/opt/img_align` は k8s 用 (ENTRYPOINT がそちらを使う)。
+
+> **GPU段 (`chains`) はイメージの中でだけ動く。** `PANOVGGT_DIR` が未設定だと
+> 推論段で止まる — ホストの python には torch 2.9.1 が入っていて
+> `import inference` が通ってしまうが、PanoVGGT が想定するのは 2.5 系で、
+> 「動くが結果が違う」を防ぐため。既存チャンクを使う段 (posegraph / anchor /
+> export / 評価) は GPU も PanoVGGT も要らないのでホストのままで動く。
+
+`mapany` 後処理と `pi3`/`holo` は別コンテナ。`mesh/*` (open3d) と `gs/*`
+(gsplat) はこのイメージに入れていない。
 
 セッションは環境変数 `IMG_SESSION`。`config.py` が import 時に凍結するので、
 **必ず env 設定後に import される**こと。受け付ける形は3つ:
@@ -109,7 +129,7 @@ subprocess 起動)。`mapany` 後処理のみ docker サービス `mapanything` 
   **島が必要とするチャンクだけ**推論する。既存チャンクはスキップ(再開可能)
 - **出力**: `results/<s>/pcd/chunks/chunk_XX/`(チャンクごとの
   `cameras.npz`・`points.ply`・per-frame点群)+島台帳 `pv_manifest.json`
-- **モデル切替** `--model {pv,pi3,holo}`: 既定`pv`=PanoVGGT(ホストのconda env)。
+- **モデル切替** `--model {pv,pi3,holo}`: 既定`pv`=PanoVGGT(img_align イメージ内)。
   `pi3`/`holo`(=Pi3-Finetuned-Holo360D)は**pi3コンテナ**で動き、
   `core/chunking.infer_chunks`が`docker compose exec`へ自動で振り分ける
   (欠落チャンクをまとめて1プロセスに渡し、モデル読み込みは1回)。
@@ -192,14 +212,15 @@ subprocess 起動)。`mapany` 後処理のみ docker サービス `mapanything` 
 |---|---|
 | `config.py` | セッション/物件レジストリ・パス・SESSION_CFG(唯一のIMG_SESSION読取り元)。IMG_SESSION はパスも受け、`_register_dataset` がその場で Property を組む |
 | `steps.py` | **段の登録表と依存解決** (`needs`/`before`/`caps` + graphlib)。順序はここが決める |
-| `api.py` | 外部から呼ぶ入口 (`run` / `plan`)。**このプロセスで実行する** — 1ポッド1データセットならプロセス分離は要らない |
+| `main.py` (直下) | **ポッドの ENTRYPOINT**。`tools/recon` の薄いラッパ |
+| `api.py` | Python から呼ぶ入口 (`run` / `plan`)。**このプロセスで実行する** — 1ポッド1データセットならプロセス分離は要らない |
 | `pipeline.py` | 既存7セッション用の互換CLI (引数を steps.py のオプションへ翻訳するだけ) |
-| `conf/` | hydra設定 (`recon.yaml` = 入力ディレクトリ実行 / `ext_batch.yaml` = 大量実走) |
+| `conf/` | hydra設定 (`recon.yaml` = 入力ディレクトリ実行) |
 | `core/` | `caps`(入力の能力判定 + 使える CPU 数) `signals`(入口が SIGTERM をプロセスグループへ中継) `ingest`(入力の imu/ を results へ台帳つきコピー) `panovggt`(チャンク推論subprocess) `panovggt_batch`(一括推論=モデル読込1回) `floor_assign`(手動の階割当) `floor_seq`(IMU遷移からの階決定。2/6セッションのみ) `pi3`(Pi3/Pi3-FT推論、PanoVGGT互換出力) `chunking`(島計画) `chaining`(連結) `crops`(e2pクロップ) `plan_grid`(図面グリッド) `geometry`(Sim3/重力/ヨー統計) `io_ply` |
 | `postproc/` | 上表の後処理+`anchor_run`(全島を並列アンカー) `mapany_run`(mapany起動) `anchor_score`(候補スコア) `scale_prior`(m_per_unitの供給源) `island_quality`(島の指紋の濃さ。判別力は無かった) `metric_stitch`(図面なしメートル化。不発) `density_map`(壁密度地図) `plan_match`(FFTグリッド照合) `plan_icp`(point-to-line ICP・座標変換ユーティリティ) `anchor`(島アンカー本体・prepare_island) |
 | `eval/` | `anchor_oracle`(候補に正解があるか) `anchor_confidence`(GT無しで当たりを見分ける指標) `anchor_overlay`(アンカー素の出力) `density_view`(密度地図) `outdoor_proxy`(屋外島の暫定判定) `scale_probe` `gt_traj`(GT読込・`mm_per_px()`=遅延評価の関数・GTは物件ごとの trajectory_points.csv) `frontend`(フィットATE) `chunk_cmp`(チャンク単体採点+`gt_interp`) `floor_overlay`(階別の図面オーバーレイ比較) `overview`(島別色分け) `island_diag`(島内診断) `depth`(壁面残差で点群品質比較) |
 | `out/` | `export` `viewer` |
-| `tools/` | `recon`(**入力ディレクトリから回すCLI**) `_hydra`(hydra読込の共通部) `ext_batch`(大量実走) `align_tool`(ブラウザ手動登録) `mask_eval_tool` `boundary_mask`(敷地マスク) `model_bench`(3モデル×窓の比較ドライバ) |
+| `tools/` | `recon`(**入力ディレクトリから回すCLI**。入口は直下の `main.py`) `_hydra`(hydra読込の共通部) `align_tool`(ブラウザ手動登録) `mask_eval_tool` `boundary_mask`(敷地マスク) `model_bench`(3モデル×窓の比較ドライバ) |
 | `gs/` `mesh/` | Gaussian Splatting / メッシュ・衝突モデル の各系統 |
 | `imu/` | insv抽出(`extract`)・姿勢(`attitude`)・**階段検出(`transitions`=stairnet CNN、島計画の本番ソース)**・**フレーム時刻(`frame_times`→`timeline`)**ほか |
 | `tests/` | pytest 無しでも走る検査 (`check_config`=凍結値スナップショット / `check_imports`=importスモーク) |
@@ -235,6 +256,9 @@ subprocess 起動)。`mapany` 後処理のみ docker サービス `mapanything` 
 | `config._register_ext`(ext/ 専用) | `config._register_dataset`(任意のディレクトリ) |
 | `IMG_SESSION` はセッション名のみ | 名前 / パス / `名前=パス` の3形 |
 | 入力の imu/ は手で置く | `core.ingest.materialize_imu`(台帳つき) |
+| PanoVGGT は conda env の subprocess | **同一プロセス** (`PANOVGGT_DIR` 必須)。単一 Docker イメージ |
+| `python -m img_align.tools.recon` | `python main.py` (イメージの ENTRYPOINT) |
+| `tools/ext_batch`(大量実走) | 撤去。`ext/sfmXXXX` は `input=` にそのまま渡す |
 
 ## 確立済みの運用レシピ(実測の詳細は results/REPORT.md)
 

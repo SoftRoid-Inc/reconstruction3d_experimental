@@ -160,6 +160,11 @@ def _register_dataset(root, session=None, overwrite=False):
     meta = {**_load_meta(root / "meta.json"), **_load_meta(zumen / "meta.json")}
     _check_meta(zumen / "meta.json", meta)
     name = session or meta.get("session") or root.name
+    # 同じ root を指す再登録は素通り。`ext/sfm11196` は _register_ext が
+    # 先に e11196 として登録しているので、パスで渡したときに衝突扱いに
+    # しない (同じデータセットを2通りの書き方で指しているだけ)
+    if name in PROPERTY and PROPERTY[name].root == root:
+        return name
     if name in PROPERTY and not overwrite:
         raise SystemExit(
             f"セッション名 '{name}' は既に登録済み ({PROPERTY[name].root})。"
