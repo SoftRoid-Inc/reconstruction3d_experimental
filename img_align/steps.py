@@ -25,6 +25,7 @@ class Ctx:
     chunks_dir: str = None
     tag_suffix: str = ""
     caps: object = None
+    order: tuple = ()              # この実行で走る段 (前提の補完ずみ)
     skipped: dict = field(default_factory=dict)   # step -> 理由
 
     def get(self, path, default=None):
@@ -55,7 +56,8 @@ def _prep(ctx):
     if PROP.person_mask_dir is None and not SEG_DIR.exists():
         print("[prep] 人物マスクなし (person_mask_dir/seg未生成) — "
               "マスク無しで続行。必要なら seg_ade20k を実行")
-    if ctx.get("chunking.crops"):
+    # mapany はピンホールクロップを食うので、選ばれていれば自動で作る
+    if ctx.get("chunking.crops") or "mapany" in ctx.order:
         from img_align.core.crops import generate
         generate(tag="mapany_f130")
 
@@ -352,7 +354,8 @@ def execute(selected, opt=None):
     from img_align.core import caps as caps_mod
     caps = caps_mod.detect()
     order, skip = plan(selected, caps)
-    ctx = Ctx(opt=dict(opt or {}), caps=caps, skipped=skip)
+    ctx = Ctx(opt=dict(opt or {}), caps=caps, order=tuple(order),
+              skipped=skip)
     for s, why in skip.items():
         print(f"[skip] {s}: {why}")
     print(f"[plan] {' -> '.join(order)}")
