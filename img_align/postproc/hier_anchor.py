@@ -86,12 +86,12 @@ def hier_anchor(sub_tag, floor, parent_track, mpu=None):
 
 
 def _eval_vs_gt(track, floor):
-    from img_align.eval.gt_traj import MM_PER_PX, load_gt
+    from img_align.eval.gt_traj import mm_per_px, load_gt
     try:
         gt = load_gt()
     except Exception:
         return None
-    errs = [np.hypot(x - gt[fr]["x_px"], y - gt[fr]["y_px"]) * MM_PER_PX / 1000
+    errs = [np.hypot(x - gt[fr]["x_px"], y - gt[fr]["y_px"]) * mm_per_px() / 1000
             for n, (x, y) in track.items()
             for fr in [int(n.replace("frame_", ""))]
             if fr in gt and gt[fr]["floor"] == floor]

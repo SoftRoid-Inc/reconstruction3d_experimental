@@ -170,7 +170,7 @@ def check(ply=None, suffix=""):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from img_align.eval.gt_traj import MM_PER_PX
+    from img_align.eval.gt_traj import mm_per_px
     from img_align.mesh.meshing import wall_distance_stats
     from img_align.postproc.plan_icp import wall_face_segments_px
     d = read_3dgs_centers(ply or OUT_DIR / f"gaussian_house{SFX}.ply")
@@ -181,7 +181,7 @@ def check(ply=None, suffix=""):
         if len(band) > 1000:
             res[floor] = wall_distance_stats(band, floor)
         ax.scatter(band[::5, 0], band[::5, 1], s=0.3, c="orange", alpha=0.5)
-        for x1, y1, x2, y2 in wall_face_segments_px(floor) * MM_PER_PX / 1000:
+        for x1, y1, x2, y2 in wall_face_segments_px(floor) * mm_per_px() / 1000:
             ax.plot([x1, x2], [y1, y2], "-", color="cyan", lw=1.0)
         ax.set_aspect("equal")
         ax.invert_yaxis()

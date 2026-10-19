@@ -47,6 +47,18 @@ def _img_dataurl(img, fmt="jpeg", **kw):
     return f"data:image/{fmt};base64," + base64.b64encode(buf.getvalue()).decode()
 
 
+def _find_frame(frames_dir, num):
+    """番号からフレーム画像を探す (ゼロ詰め桁数が物件で違っても当たる)"""
+    for pad in (6, 5, 4, 0):
+        p = frames_dir / f"frame_number_{num:0{pad}d}.jpg"
+        if p.exists():
+            return p
+    hit = sorted(frames_dir.glob(f"frame_number_*{num}.jpg"))
+    if not hit:
+        raise FileNotFoundError(f"frame {num} not in {frames_dir}")
+    return hit[0]
+
+
 def dump_session():
     # prepare_island 等の print で stdout の JSON が汚れないよう退避
     import contextlib
@@ -61,14 +73,14 @@ def _build_session_payload():
     from img_align.config import OUT_DIR
     from img_align.postproc.anchor import MIN_Y_BINS, Y_BIN_M, prepare_island
     from img_align.config import PROP, RESULTS_DIR, SESSION
-    from img_align.eval.gt_traj import MM_PER_PX
+    from img_align.eval.gt_traj import mm_per_px
     from img_align.core.plan_grid import PlanGrid, ZUMEN_DIR
     from img_align.mesh.meshing import islands_for, load_chunk_light
 
     payload = {"sess": SESSION, "backend_dir": str(OUT_DIR),
                "frames_dir": str(PROP.frames_dir),
                "drawing_wh": list(PROP.drawing_wh),
-               "mm_per_px": MM_PER_PX, "floors": {}, "islands": []}
+               "mm_per_px": mm_per_px(), "floors": {}, "islands": []}
     grids = {}
     for isl in islands_for(SESSION):
         tag, floor = isl["tag"], isl["floor"]
@@ -273,7 +285,9 @@ class AlignServer:
             return self.frame_cache[key]
         from PIL import Image
         p = self.payload(sess)
-        fp = Path(p["frames_dir"]) / f"frame_number_{num:06d}.jpg"
+        # このツールは複数セッションを同時に扱うので、config のゼロ詰め桁数
+        # (FRAME_PAD) は当てにできない。番号から実物を探す
+        fp = _find_frame(Path(p["frames_dir"]), num)
         img = Image.open(fp)
         if width < img.width:
             img = img.resize((width, width // 2), Image.BILINEAR)

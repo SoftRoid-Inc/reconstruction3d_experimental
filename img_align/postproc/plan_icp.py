@@ -26,7 +26,7 @@ from recon3d.loader import load_labelme
 from img_align.config import CAM_HEIGHT_M
 from img_align.core.geometry import camera_centers, gravity_from_cameras, rotation_to_y
 from img_align.postproc.density_map import scale_from_local_floors, slab_peaks
-from img_align.eval.gt_traj import MM_PER_PX, evaluate_track, load_gt
+from img_align.eval.gt_traj import mm_per_px, evaluate_track, load_gt
 from img_align.core.plan_grid import KNOWN_WIDTH_MM, RES_M, ZUMEN_DIR, PlanGrid
 from img_align.config import RESULTS_DIR
 from img_align.core.io_ply import read_ply_xyzrgb

@@ -24,7 +24,7 @@ from img_align.core.bridge import (bridge_transform, consensus, islands_at,
                                    junctions, manifest_islands, transported)
 from img_align.core.island_group import CONSENSUS_OK_M, build_groups
 from img_align.eval.bridge_eval import _apply2, _sim2_fit
-from img_align.eval.gt_traj import MM_PER_PX, load_gt
+from img_align.eval.gt_traj import mm_per_px, load_gt
 
 PAD_PX = 140
 COLORS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#17becf",
@@ -70,8 +70,8 @@ def draw(a_end, b_start, mode, gt, horiz=(0, 2)):
     gb, yb = _gt_xy(gt, fb)
     ib = [i for i, f in enumerate(fb) if f in gt]
     err = (float(np.median(np.linalg.norm(pb[ib] - yb, axis=1)))
-           * MM_PER_PX / 1000 if len(gb) >= 4 else None)
-    m = MM_PER_PX / 1000
+           * mm_per_px() / 1000 if len(gb) >= 4 else None)
+    m = mm_per_px() / 1000
 
     floor = ma.get("floor") or mb.get("floor")
     bg = np.asarray(Image.open(PROP.zumen_dir / f"{floor}.jpg").convert("L"))
@@ -157,7 +157,7 @@ def draw_floors(gt, modes, thresh=CONSENSUS_OK_M, horiz=(0, 2)):
                     color=COLORS[gi % len(COLORS)], zorder=4,
                     label=f"群れ{gi} ({n_isl}島: "
                           f"{'+'.join(it[1].split('_')[-1] for it in sub)}) "
-                          f"{r * MM_PER_PX / 1000:.2f}m")
+                          f"{r * mm_per_px() / 1000:.2f}m")
         A = np.vstack(allxy)
         ax.set_xlim(max(0, A[:, 0].min() - PAD_PX),
                     min(bg.shape[1], A[:, 0].max() + PAD_PX))

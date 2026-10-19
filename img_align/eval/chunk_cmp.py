@@ -112,9 +112,9 @@ def main():
             print(f"{s}  {a}:{b + 1}:1   {note}")
         return
 
-    from img_align.eval.gt_traj import MM_PER_PX, load_gt
+    from img_align.eval.gt_traj import mm_per_px, load_gt
     gt = load_gt()
-    rows = [score(t, gt, MM_PER_PX) for t in args.tags]
+    rows = [score(t, gt, mm_per_px()) for t in args.tags]
     w = max(len(r["tag"]) for r in rows)
     print(f"{'tag':{w}}  {'n':>3} {'median':>7} {'p90':>7} {'max':>7}  spread_t/r")
     for r in rows:

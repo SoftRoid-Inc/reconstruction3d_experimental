@@ -11,7 +11,16 @@ REPORT_PATH = IMG_ALIGN_DIR / "results" / "REPORT.md"
 
 # 撮影セッション。環境変数 IMG_SESSION で切替。
 # 0828=28-AAAAA竣工後(既定) / 0312=28-AAAAA工事中 / 19176=28-CCCCC(建築中)
-SESSION = os.environ.get("IMG_SESSION", "0828")
+#
+# **IMG_SESSION はパスも受け付ける**。レジストリに無い値はデータセット
+# ディレクトリとして解釈し、その場で Property を組み立てて登録する
+# (下の _register_dataset)。環境変数を2本に増やさないのが要点:
+#   - tools/ext_batch.py は `{**os.environ, "IMG_SESSION": sess}` で子に渡す。
+#     別変数を足すと明示上書きされず**全件に漏れる**
+#   - 「両方セットされたときどちらが勝つか」という曖昧さが生まれない
+SESSION_REF = os.environ.get("IMG_SESSION", "0828")
+# 子プロセス/コンテナを起こすときは SESSION ではなく **SESSION_REF** を渡す
+# こと。SESSION は派生名なので、env に戻すとレジストリに無くて落ちる
 
 # 物件レジストリ: セッション → 入力データの所在と図面パラメータ
 _28_11177 = PROJECT_ROOT / "28-AAAAA"
@@ -83,22 +92,99 @@ PROPERTY = {
 #   trajectory_data_by_scan_data_id.csv floor_info.csv meta.json
 # セッション名は meta.json の "session"、gt_session は撮影日 (MMDD) で別物
 # (同じ日に撮った別スキャンがあるため名前が衝突する)
-def _register_ext():
+def _load_meta(path):
+    """meta.json を読む (無ければ {})。壊れていたら黙らずに落とす"""
     import json as _json
+    if not path.is_file():
+        return {}
+    try:
+        m = _json.loads(path.read_text())
+    except Exception as e:
+        raise SystemExit(f"{path} を読めない: {type(e).__name__}: {e}")
+    if not isinstance(m, dict):
+        raise SystemExit(f"{path}: トップレベルはオブジェクトである必要がある")
+    return m
+
+
+# meta.json が解釈するキー。これ以外 (ext_batch が書く s3key/n_frames 等) は
+# 覚え書きとして素通りさせる。**型だけは入口で検査する** — known_width_mm に
+# 文字列が入ると PlanGrid が TypeError を出し、アンカー経路が import ごと
+# 死ぬ (その例外が出るのは図面を読む瞬間なので原因が分かりにくい)
+def _check_meta(path, m):
+    def bad(k, why):
+        raise SystemExit(f"{path}: \"{k}\" が不正 ({why}) -> {m[k]!r}")
+
+    kw = m.get("known_width_mm")
+    if kw is not None:
+        vals = kw.values() if isinstance(kw, dict) else [kw]
+        if isinstance(kw, dict) and not all(isinstance(k, str) for k in kw):
+            bad("known_width_mm", "階名は文字列")
+        if not all(isinstance(v, (int, float)) and v > 0 for v in vals):
+            bad("known_width_mm", "最外壁芯間のx方向スパン[mm]。正の数、"
+                                  "階で違うなら {\"1F\": 13877.5, ...}")
+    if m.get("mm_per_px") is not None and not (
+            isinstance(m["mm_per_px"], (int, float)) and m["mm_per_px"] > 0):
+        bad("mm_per_px", "正の数 [mm/px]")
+    wh = m.get("drawing_wh")
+    if wh is not None and not (isinstance(wh, (list, tuple)) and len(wh) == 2
+                               and all(isinstance(v, int) and v > 0
+                                       for v in wh)):
+        bad("drawing_wh", "図面画像サイズ [幅, 高さ] の整数2つ")
+    for k in ("session", "gt_session"):
+        if m.get(k) is not None and not isinstance(m[k], str):
+            bad(k, "文字列")
+
+
+def _register_dataset(root, session=None, overwrite=False):
+    """データセットディレクトリを PROPERTY に登録し、セッション名を返す
+
+    期待する構成 (外部パイプラインが用意する。欠けていれば能力が下がるだけ):
+        <root>/images/   frame_number_*.jpg          必須
+              /masks/    frame_number_*.jpg          人物マスク (白=有効)
+              /imu/      transitions.json 等          IMU派生物 (外部生成)
+              /floors/   1F.json 1F.jpg … meta.json   間取り図ラベル
+              /results/<session>/                     出力 (ここだけ書く)
+
+    図面の実寸 `known_width_mm` は **floors/meta.json** に置く。壁注釈だけでは
+    px→m が決まらず図面アンカーは動かない (core/plan_grid.PlanGrid 参照)。
+    `ext/` 互換のため <root>/meta.json と <root>/zumen/ も見る。
+    """
+    # symlink は**解決しない**。ext/ は /home/maren/temp/recon3d_ext への
+    # symlink で、解決するとコンテナの /code2 マウント外のパスになる
+    root = Path(os.path.abspath(os.path.expanduser(str(root))))
+    if not root.is_dir():
+        raise SystemExit(f"データセットが見つからない: {root}")
+    # 新しい入力契約は floors/。ext/ 互換で zumen/ も見る
+    # (どちらも無ければ floors/ を名乗る — エラーメッセージが分かりやすい)
+    zumen = root / "zumen" if (root / "zumen").is_dir() else root / "floors"
+    meta = {**_load_meta(root / "meta.json"), **_load_meta(zumen / "meta.json")}
+    _check_meta(zumen / "meta.json", meta)
+    name = session or meta.get("session") or root.name
+    if name in PROPERTY and not overwrite:
+        raise SystemExit(
+            f"セッション名 '{name}' は既に登録済み ({PROPERTY[name].root})。"
+            f"meta.json の \"session\" か --session で別名を付けてください")
+    frames = root / "images"
+    masks = root / "masks"
+    wh = meta.get("drawing_wh")
+    PROPERTY[name] = Property(
+        root=root, frames_dir=frames,
+        zumen_dir=zumen,
+        known_width_mm=meta.get("known_width_mm"),
+        mm_per_px=meta.get("mm_per_px"),
+        gt_session=meta.get("gt_session"),
+        person_mask_dir=masks if masks.is_dir() else None,
+        **({"drawing_wh": tuple(wh)} if wh else {}))
+    return name
+
+
+def _register_ext():
+    """ext/ 配下を自動走査して登録 (外部テストデータセット156件を手で書かない)"""
     if not _EXT.exists():
         return
     for _d in sorted(_EXT.iterdir()):
-        mp = _d / "meta.json"
-        if not mp.is_file():
-            continue
-        try:
-            m = _json.loads(mp.read_text())
-        except Exception:
-            continue
-        PROPERTY[m["session"]] = Property(
-            root=_d, frames_dir=_d / "images", zumen_dir=_d / "zumen",
-            known_width_mm=None, mm_per_px=None,
-            person_mask_dir=_d / "masks", gt_session=m["gt_session"])
+        if (_d / "meta.json").is_file():
+            _register_dataset(_d, overwrite=True)
 
 
 _register_ext()
@@ -113,6 +199,31 @@ for _d in ("0715", "0912", "0925"):
                             person_mask_dir=_28_41237 / _d / "masks",
                             colmap_model=_28_41237 / _d / "sfm"
                             / "colmap_coarse" / "0")
+
+def _resolve_session(ref):
+    """IMG_SESSION の値 -> セッション名
+
+    受け付ける形:
+      "0912"                     登録済みセッション名
+      "/data/reconstruction"     データセットディレクトリ (名前はディレクトリ名)
+      "myrun=/data/reconstruction"  名前を明示 (同じ入力を条件違いで回すとき)
+    """
+    name = None
+    if ref not in PROPERTY and "=" in ref:
+        name, ref = ref.split("=", 1)
+    if ref in PROPERTY:
+        if name and name != ref:
+            raise SystemExit(f"'{ref}' は登録済みセッション。別名は付けられない")
+        return ref
+    p = Path(ref).expanduser()
+    if not p.is_dir():
+        raise SystemExit(
+            f"IMG_SESSION='{ref}' は登録済みセッションでもディレクトリでもない"
+            f"\n  登録済み: {sorted(PROPERTY)}")
+    return _register_dataset(p, session=name)
+
+
+SESSION = _resolve_session(SESSION_REF)
 PROP = PROPERTY[SESSION]
 
 FRAMES_DIR = PROP.frames_dir
@@ -147,12 +258,52 @@ SESSION_CFG = {
              "ascend": (252, 280), "descend": (728, 756)},
     "0925": {"frames": range(0, 1378), "ascend": (0, 0), "descend": (0, 0)},
 }
-# 外部データセット (ext/) は階段区間の手動注釈を持たない。フレーム数は画像から
-# 数え、階段区間は空にする (島の切り方はGTの階ラベルから決めるので要らない)
-if SESSION not in SESSION_CFG and SESSION in PROPERTY:
-    _fd = PROPERTY[SESSION].frames_dir
-    _n = len(list(_fd.glob("frame_number_*.jpg"))) if _fd.exists() else 0
-    SESSION_CFG[SESSION] = {"frames": range(0, _n),
+
+def frame_indices(frames_dir=None):
+    """フレーム番号の昇順リスト。ゼロ詰め桁数には依存しない"""
+    d = Path(frames_dir or FRAMES_DIR)
+    if not d.is_dir():
+        return []
+    out = []
+    for p in d.glob("frame_number_*.jpg"):
+        s = p.stem[len("frame_number_"):]
+        if s.isdigit():
+            out.append(int(s))
+    return sorted(out)
+
+
+def _frame_pad(frames_dir):
+    """ファイル名のゼロ詰め桁数を実物から決める (既定6)"""
+    d = Path(frames_dir)
+    for p in sorted(d.glob("frame_number_*.jpg")) if d.is_dir() else ():
+        s = p.stem[len("frame_number_"):]
+        if s.isdigit():
+            return len(s)
+    return 6
+
+
+FRAME_PAD = _frame_pad(FRAMES_DIR)
+
+
+def frame_name(i, ext=".jpg"):
+    """フレーム番号 -> ファイル名。桁数を決め打ちしない"""
+    return f"frame_number_{i:0{FRAME_PAD}d}{ext}"
+
+
+def frame_path(i, base=None, ext=".jpg"):
+    return Path(base or FRAMES_DIR) / frame_name(i, ext)
+
+
+# 未登録セッション (ext/ や入力ディレクトリ渡し) は階段区間の手動注釈を
+# 持たない。フレーム範囲は画像から決め、階段区間は空にする
+# (島の切り方はIMU/GTから決めるので要らない)
+#
+# 0枚のときもここでは落とさない。config の import はレポート生成など
+# フレームを要らない経路でも走る (ext_batch は評価後に images/ を消す)。
+# **走らせる側**で弾くこと → core/caps.py が frames 能力を見て止める
+if SESSION not in SESSION_CFG:
+    _idx = frame_indices()
+    SESSION_CFG[SESSION] = {"frames": range(0, _idx[-1] + 1 if _idx else 0),
                             "ascend": (0, 0), "descend": (0, 0)}
 CFG = SESSION_CFG[SESSION]
 STAIR_ASCEND = CFG["ascend"]    # 1F→2F

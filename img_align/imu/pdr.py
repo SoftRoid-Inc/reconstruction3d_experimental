@@ -18,7 +18,7 @@ import numpy as np
 from scipy.signal import find_peaks
 
 from img_align.config import IMU_DIR
-from img_align.eval.gt_traj import MM_PER_PX, load_gt
+from img_align.eval.gt_traj import mm_per_px, load_gt
 
 STEP_LEN_M = 0.65
 STEP_PROM = 0.8      # 歩数ピークのprominence [m/s^2]
@@ -61,7 +61,7 @@ def main():
     gt = load_gt()
     gt_f = np.array(sorted(gt))
     gt_xy = np.array([[gt[f]["x_px"], gt[f]["y_px"]] for f in gt_f]) \
-        * MM_PER_PX / 1000
+        * mm_per_px() / 1000
     pdr_at_gt = np.stack([np.interp(gt_f, frames, pos[:, 0]),
                           np.interp(gt_f, frames, pos[:, 1])], axis=1)
     s, R, tr = fit_similarity_2d(pdr_at_gt, gt_xy)

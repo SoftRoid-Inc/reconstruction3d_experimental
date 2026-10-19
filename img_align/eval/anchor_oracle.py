@@ -25,7 +25,7 @@ import numpy as np
 
 from img_align.config import BENCH_DIR
 from img_align.core.plan_grid import PlanGrid
-from img_align.eval.gt_traj import MM_PER_PX, load_gt
+from img_align.eval.gt_traj import mm_per_px, load_gt
 from img_align.postproc.anchor import prepare_island
 from img_align.postproc.anchor_score import SCORERS, AnchorScorer
 from img_align.postproc.corners import (ADD_ROT_BRANCHES, DENS_THR,
@@ -89,7 +89,7 @@ def gt_err(px, names, gt):
         f = int(nm.replace("frame_", ""))
         if f in gt:
             e.append(math.dist(p, (gt[f]["x_px"], gt[f]["y_px"])))
-    return float(np.median(e)) * MM_PER_PX / 1000 if len(e) >= 4 else None
+    return float(np.median(e)) * mm_per_px() / 1000 if len(e) >= 4 else None
 
 
 def main():

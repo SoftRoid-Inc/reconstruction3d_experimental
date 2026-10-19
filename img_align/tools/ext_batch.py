@@ -51,11 +51,11 @@ from pathlib import Path
 from typing import List, Optional
 
 import typer
-from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
-ROOT = Path(__file__).resolve().parents[2]
-CONF_DIR = ROOT / "img_align" / "conf"
+from img_align.tools._hydra import CONF_DIR, ROOT  # noqa: F401
+from img_align.tools._hydra import load_cfg as _load_cfg
+
 app = typer.Typer(add_completion=False,
                   help="外部テストデータセットの大量実走")
 
@@ -63,8 +63,7 @@ app = typer.Typer(add_completion=False,
 def load_cfg(overrides: Optional[List[str]] = None,
              name: str = "ext_batch") -> DictConfig:
     """hydra設定を読む。overrides は `key=value` の列"""
-    with initialize_config_dir(config_dir=str(CONF_DIR), version_base=None):
-        return compose(config_name=name, overrides=list(overrides or []))
+    return _load_cfg(overrides, name)
 
 
 def _p(cfg, key) -> Path:

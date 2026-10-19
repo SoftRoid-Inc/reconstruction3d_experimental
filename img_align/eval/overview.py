@@ -24,7 +24,7 @@ import numpy as np
 from img_align.config import BENCH_DIR, SESSION
 from img_align.core.geometry import rotation_to_y
 from img_align.eval.frontend import fit2d
-from img_align.eval.gt_traj import MM_PER_PX, load_gt
+from img_align.eval.gt_traj import mm_per_px, load_gt
 
 
 def fit_island(tag, gt):
@@ -38,7 +38,7 @@ def fit_island(tag, gt):
     p = pos @ rotation_to_y(up / np.linalg.norm(up)).T
     # GTは線形補間 (最近傍スナップはGT欠損区間でATEを水増しする)
     from img_align.eval.chunk_cmp import gt_interp
-    gt_xy, used = gt_interp(gt, frames, MM_PER_PX)
+    gt_xy, used = gt_interp(gt, frames, mm_per_px())
     if len(used) < 4:
         return None
     best = None
@@ -62,8 +62,8 @@ def main():
     gt = load_gt()
     manifest = json.loads((BENCH_DIR / args.manifest).read_text())
 
-    gt_sorted = np.array([[gt[f]["x_px"] * MM_PER_PX / 1000,
-                           gt[f]["y_px"] * MM_PER_PX / 1000]
+    gt_sorted = np.array([[gt[f]["x_px"] * mm_per_px() / 1000,
+                           gt[f]["y_px"] * mm_per_px() / 1000]
                           for f in sorted(gt)])
     fig, ax = plt.subplots(figsize=(11, 9))
     ax.plot(gt_sorted[:, 0], gt_sorted[:, 1], "-", color="0.65", lw=3,

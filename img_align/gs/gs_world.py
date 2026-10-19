@@ -19,7 +19,8 @@ import os
 
 import numpy as np
 
-from img_align.config import FRAMES_DIR, PROJECT_ROOT, RESULTS_DIR, SESSION
+from img_align.config import (FRAMES_DIR, PROJECT_ROOT, RESULTS_DIR, SESSION,
+                              frame_name)
 from img_align.core.plan_grid import PlanGrid
 from img_align.mesh.meshing import ISLANDS, OUT_DIR, SFX, apply_matrix, drawing_matrix, islands_expanded, islands_for, island_scale, load_anchor, resolve_frames
 
@@ -95,7 +96,7 @@ def cmd_prep(args):
     (out / "panos").mkdir(parents=True, exist_ok=True)
     runlist = []
     for c in cands:
-        src = FRAMES_DIR / f"frame_number_{c['fr']:06d}.jpg"
+        src = FRAMES_DIR / frame_name(c['fr'])
         dst = out / "panos" / f"{c['name']}.png"
         if not src.exists():
             print(f"  warn: {src.name} なし -> skip")
@@ -178,12 +179,12 @@ RY180 = np.diag([-1.0, 1.0, -1.0])
 
 def plan_bbox_m():
     """図面GT壁のbbox±マージン [m] (窓越し屋外の飛散クロップ用)"""
-    from img_align.eval.gt_traj import MM_PER_PX
+    from img_align.eval.gt_traj import mm_per_px
     from img_align.postproc.plan_icp import wall_segments_px
     lo = np.array([np.inf, np.inf])
     hi = -lo
     for isl in islands_for(SESSION):
-        segs = wall_segments_px(isl["floor"]) * MM_PER_PX / 1000
+        segs = wall_segments_px(isl["floor"]) * mm_per_px() / 1000
         pts = segs.reshape(-1, 2)
         lo = np.minimum(lo, pts.min(0))
         hi = np.maximum(hi, pts.max(0))

@@ -32,7 +32,7 @@ from recon3d.mesh import boxes_to_scene, footprint_polygon
 
 from img_align.config import BENCH_DIR
 from img_align.config import SESSION
-from img_align.eval.gt_traj import MM_PER_PX
+from img_align.eval.gt_traj import mm_per_px
 from img_align.core.plan_grid import ZUMEN_DIR
 from img_align.core.io_ply import read_ply_xyzrgb
 from img_align.postproc.plan_icp import wall_segments_px
@@ -225,7 +225,7 @@ def poisson_visual(xyz, rgb, out_path):
 def check_figure(structure, hulls, out_path):
     fig, axes = plt.subplots(1, 2, figsize=(20, 11))
     for ax, (floor, z_off) in zip(axes, FLOORS):
-        for x1, y1, x2, y2 in wall_segments_px(floor) * MM_PER_PX / 1000:
+        for x1, y1, x2, y2 in wall_segments_px(floor) * mm_per_px() / 1000:
             ax.plot([x1, x2], [y1, y2], "-", color="cyan", lw=1.2)
         for name, g in structure.geometry.items():
             v = g.vertices

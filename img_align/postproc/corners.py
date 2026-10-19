@@ -526,8 +526,8 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
             return 0.0
         j, xy, _, _ = cont_ref
         px = cells_to_px(transform_pts(cam_rc[j][None], s_, th_, t_), grid)[0]
-        from img_align.eval.gt_traj import MM_PER_PX
-        return math.dist(px, xy) * MM_PER_PX / 1000
+        from img_align.eval.gt_traj import mm_per_px
+        return math.dist(px, xy) * mm_per_px() / 1000
 
     zz2, xx2 = np.nonzero(d["density"] > 0.15)
     wall_pts = np.stack([zz2, xx2], axis=1).astype(np.float64)

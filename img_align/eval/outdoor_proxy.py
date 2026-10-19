@@ -21,7 +21,7 @@ import json
 import numpy as np
 from PIL import Image
 
-from img_align.config import BENCH_DIR, FRAMES_DIR, OUT_DIR
+from img_align.config import BENCH_DIR, FRAMES_DIR, OUT_DIR, frame_name
 
 TOP_FRAC = 0.22      # 上端から見る帯 (天頂側)
 BRIGHT = 120         # 空とみなす明るさ
@@ -33,7 +33,7 @@ SAMPLE = 6           # 何フレームに1枚見るか
 
 def sky_ratio(frame):
     """1フレームの上端帯における空らしさ [0,1]"""
-    p = FRAMES_DIR / f"frame_number_{frame:06d}.jpg"
+    p = FRAMES_DIR / frame_name(frame)
     if not p.exists():
         return None
     im = Image.open(p).convert("RGB").resize((256, 128))

@@ -28,7 +28,7 @@ from img_align.postproc.plan_match import match_floor
 from img_align.config import BENCH_DIR
 from img_align.core.geometry import rotation_to_y
 from img_align.postproc.density_map import slab_peaks
-from img_align.eval.gt_traj import MM_PER_PX, load_gt
+from img_align.eval.gt_traj import mm_per_px, load_gt
 from img_align.core.plan_grid import ZUMEN_DIR, PlanGrid
 from img_align.core.io_ply import read_ply_xyzrgb
 from img_align.postproc.plan_icp import cells_to_px, icp_to_walls, segs_to_cells, similarity_from_grid, transform_pts, wall_segments_px
@@ -215,7 +215,7 @@ def anchor_island(tag, floor, gt, use_openings=False, ref=None,
                 px = cells_to_px(transform_pts(cam_rc[j][None], s0, th0, t0),
                                  grid)[0]
                 dist_m = math.dist(px, anchored_so_far[k_near]) \
-                    * MM_PER_PX / 1000
+                    * mm_per_px() / 1000
                 print(f"  branch theta={b['theta']} score={b['score']:.3f} "
                       f"continuity {dist_m:.2f}m (frame {frames[j]} vs "
                       f"{k_near})")
@@ -280,7 +280,7 @@ def assemble_and_eval(anchored, floors, gt, label=""):
     pdr_path = OUT_DIR.parent / "imu" / "pdr.npz"
     if os.environ.get("USE_PDR_BRIDGE") and pdr_path.exists():
         z = np.load(pdr_path)
-        pdr = (z["frames"], z["pos"] * 1000 / MM_PER_PX)  # m→図面px
+        pdr = (z["frames"], z["pos"] * 1000 / mm_per_px())  # m→図面px
 
     def pdr_at(f):
         fr, pos = pdr
@@ -346,7 +346,7 @@ def assemble_and_eval(anchored, floors, gt, label=""):
             continue
         n_eval += 1
         e = math.dist((tkr["x_px"], tkr["y_px"]),
-                      (gt[g]["x_px"], gt[g]["y_px"])) * MM_PER_PX / 1000
+                      (gt[g]["x_px"], gt[g]["y_px"])) * mm_per_px() / 1000
         if tkr["floor"] == gt[g]["floor"]:
             floor_ok += 1
         key = ("stair" if tkr["frame"] in stair_set

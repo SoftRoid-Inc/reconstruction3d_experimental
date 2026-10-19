@@ -27,7 +27,7 @@ from img_align.core.chaining import chain
 from img_align.core.geometry import apply
 from img_align.postproc.colmap_prior import colmap_centers, fit_chunk_to_colmap
 from img_align.config import PROJECT_ROOT, RESULTS_DIR, SESSION
-from img_align.eval.gt_traj import MM_PER_PX
+from img_align.eval.gt_traj import mm_per_px
 from img_align.core.plan_grid import RES_M, PlanGrid
 from img_align.postproc.plan_icp import transform_pts
 
@@ -177,6 +177,12 @@ def islands_for(session):
         p = prop.root / "results" / session / "backend" / "islands.json"
         if p.exists():
             return json.loads(p.read_text())
+    if session not in ISLANDS:
+        raise SystemExit(
+            f"セッション '{session}' の島定義が無い。"
+            f"results/{session}/backend/islands.json を置くか、"
+            "meshing.ISLANDS に足してください "
+            f"(静的レジストリ: {sorted(ISLANDS)})")
     return ISLANDS[session]
 
 
@@ -227,7 +233,7 @@ def island_scale(anchor, grid):
     1セルの実メートルは階ごとに異なる (2Fは図面のmm/pxが違い0.04m/セル)ので
     RES_M固定ではなく grid.cell_px から実測値を使う
     """
-    m_per_cell = grid.cell_px * MM_PER_PX / 1000
+    m_per_cell = grid.cell_px * mm_per_px() / 1000
     return anchor_scale(anchor) * m_per_cell / anchor["cell_units"]
 
 
@@ -255,8 +261,8 @@ def island_to_drawing_pts(pts, anchor, grid, z_off):
     if anchor["mirror_col"] is not None:
         cells[:, 1] = anchor["mirror_col"] - cells[:, 1]
     pc = anchor_transform_cells(cells, anchor)
-    xm = (grid.x0_px + pc[:, 1] * grid.cell_px) * MM_PER_PX / 1000
-    ym = (grid.y0_px + pc[:, 0] * grid.cell_px) * MM_PER_PX / 1000
+    xm = (grid.x0_px + pc[:, 1] * grid.cell_px) * mm_per_px() / 1000
+    ym = (grid.y0_px + pc[:, 0] * grid.cell_px) * mm_per_px() / 1000
     mpu_z = island_scale(anchor, grid)
     floor_ref = anchor.get("floor_phys_y_units", anchor["floor_y_units"])
     h = (floor_ref - p[:, 1]) * mpu_z + z_off
@@ -713,7 +719,7 @@ def cmd_tsdf(args):
 def wall_distance_stats(pts, floor):
     """点群/メッシュ頂点 → 図面GT壁の面ライン への2D距離統計 (メートル)"""
     from img_align.postproc.plan_icp import wall_face_segments_px
-    segs = wall_face_segments_px(floor) * MM_PER_PX / 1000
+    segs = wall_face_segments_px(floor) * mm_per_px() / 1000
     a, b = segs[:, :2], segs[:, 2:]
     ab = b - a
     ab2 = (ab ** 2).sum(axis=1).clip(min=1e-9)
@@ -787,7 +793,7 @@ def cmd_compare(args):
             band = pts[(pts[:, 2] > z_off + 0.3) & (pts[:, 2] < z_off + 2.2)]
             ax.scatter(band[::3, 0], band[::3, 1], s=0.3, c="orange" if
                        name != "pointcloud" else "white", alpha=0.5)
-            for x1, y1, x2, y2 in wall_face_segments_px(floor) * MM_PER_PX / 1000:
+            for x1, y1, x2, y2 in wall_face_segments_px(floor) * mm_per_px() / 1000:
                 ax.plot([x1, x2], [y1, y2], "-", color="cyan", lw=1.0)
             ax.set_aspect("equal")
             ax.invert_yaxis()

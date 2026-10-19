@@ -13,7 +13,7 @@ import numpy as np
 
 from img_align.config import BENCH_DIR
 from img_align.core.io_ply import write_ply
-from img_align.eval.gt_traj import MM_PER_PX
+from img_align.eval.gt_traj import mm_per_px
 from img_align.core.plan_grid import PlanGrid
 from img_align.core.io_ply import read_ply_xyzrgb
 from img_align.postproc.plan_icp import transform_pts, wall_segments_px
@@ -60,7 +60,14 @@ SUBSAMPLE = 3
 def export(anchor_suffix="", include_c=False, islands=None, out_name=None):
     """islands/out_name 指定でセッション既定以外の構成も書き出せる
     (例: 自動アンカー検証 islands=[("pv0616_1F",0.0,"_corners"),…])"""
-    cfg = SESSION_EXPORT[SESSION]
+    # 未登録セッション (入力ディレクトリ渡し) には手書きの既定構成が無い。
+    # 呼び出し側 (steps._export) が islands/out_name を渡すので、辞書が
+    # 無くても困らない。両方とも無いときだけ落とす
+    cfg = SESSION_EXPORT.get(SESSION)
+    if cfg is None and (islands is None or out_name is None):
+        raise SystemExit(
+            f"セッション '{SESSION}' には既定の書き出し構成が無い。"
+            "islands= と out_name= を渡すか、SESSION_EXPORT に足してください")
     islands = islands if islands is not None else cfg["islands"]
     out_name = out_name or cfg["out"]
     grids = {}
@@ -83,15 +90,15 @@ def export(anchor_suffix="", include_c=False, islands=None, out_name=None):
             cells[:, 1] = a["mirror_col"] - cells[:, 1]
         from img_align.mesh.meshing import anchor_transform_cells
         pc = anchor_transform_cells(cells, a)
-        xm = (grid.x0_px + pc[:, 1] * grid.cell_px) * MM_PER_PX / 1000
-        ym = (grid.y0_px + pc[:, 0] * grid.cell_px) * MM_PER_PX / 1000
+        xm = (grid.x0_px + pc[:, 1] * grid.cell_px) * mm_per_px() / 1000
+        ym = (grid.y0_px + pc[:, 0] * grid.cell_px) * mm_per_px() / 1000
         # 鉛直スケールはアンカーの水平スケールから導出 (島座標は等方。
         # カメラ高さ仮定由来のm_per_unitは約2倍過大だった)。
         # 1セルの実メートルは階ごとに異なる (2Fは図面のmm/pxが違い0.04m/セル)。
         # RES_M固定にすると2Fの高さが25%伸びるので cell_px から実測値を使う
         # 高さの向き: 整列フレームはy+が物理下向き (PanoVGGT equirect由来) のため
         # 物理床 floor_phys_y_units から「下ほど低い」向きで測る
-        m_per_cell = grid.cell_px * MM_PER_PX / 1000
+        m_per_cell = grid.cell_px * mm_per_px() / 1000
         mpu_z = a["s"] * m_per_cell / a["cell_units"]
         floor_ref = a.get("floor_phys_y_units",
                           a["floor_y_units"])   # 旧anchorはフォールバック
@@ -105,7 +112,7 @@ def export(anchor_suffix="", include_c=False, islands=None, out_name=None):
     # 図面の壁 (参照点カーテン)
     for floor, z_off, color in (("1F", 0.0, (60, 90, 255)),
                                 ("2F", 2.9, (90, 200, 255))):
-        segs = wall_segments_px(floor) * MM_PER_PX / 1000
+        segs = wall_segments_px(floor) * mm_per_px() / 1000
         pts = []
         for x1, y1, x2, y2 in segs:
             n = max(int(np.hypot(x2 - x1, y2 - y1) / 0.05), 2)

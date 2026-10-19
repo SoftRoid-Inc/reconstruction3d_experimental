@@ -29,7 +29,7 @@ from img_align.config import BENCH_DIR, PROP, SESSION
 from img_align.core.geometry import rotation_to_y
 from img_align.eval.chunk_cmp import gt_interp
 from img_align.eval.frontend import fit2d
-from img_align.eval.gt_traj import MM_PER_PX, load_gt
+from img_align.eval.gt_traj import mm_per_px, load_gt
 
 DT = 0.5              # フレーム間隔[s]
 WALK_MAX = 1.5        # 屋内歩行の速度上限の目安 [m/s]
@@ -56,7 +56,7 @@ def fit_island_px(tag, gt):
     ので両方試して残差の小さい方を採る。
     """
     fr, p = island_xy(tag)
-    g, idx = gt_interp(gt, fr, MM_PER_PX)
+    g, idx = gt_interp(gt, fr, mm_per_px())
     if len(idx) < 4:
         return None
     best = None
@@ -67,7 +67,7 @@ def fit_island_px(tag, gt):
         e = np.linalg.norm(T(x[idx]) - g, axis=1)
         if best is None or np.median(e) < np.median(best[1]):
             best = (T(x), e)
-    return best[0] / (MM_PER_PX / 1000), best[1]
+    return best[0] / (mm_per_px() / 1000), best[1]
 
 
 def floor_of(info, gt):
@@ -83,7 +83,7 @@ def gt_track(gt, floor):
     g = [(f, v) for f, v in sorted(gt.items()) if v["floor"] == floor]
     xy = np.array([[v["x_px"], v["y_px"]] for _, v in g])
     fr = np.array([f for f, _ in g])
-    d = np.linalg.norm(np.diff(xy, axis=0), axis=1) * MM_PER_PX / 1000
+    d = np.linalg.norm(np.diff(xy, axis=0), axis=1) * mm_per_px() / 1000
     return xy, np.r_[np.nan, d / (np.diff(fr) * DT)]
 
 

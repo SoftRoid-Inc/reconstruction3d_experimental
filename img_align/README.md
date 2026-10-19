@@ -3,6 +3,37 @@
 360°動画フレームから **PanoVGGT** で軌跡・点群を生成し(メイン)、精度を上げる
 **任意後処理**(回転修復・MapAnything条件付け・図面アンカー等)を積む構成。
 
+## 外部の入力ディレクトリから回す (本番)
+
+S3から落とした素材が1つのディレクトリに揃っている前提。リポジトリを
+編集せずに新しい物件を回せる。CLIは **typer**、設定は **hydra**。
+
+```
+reconstruction/
+  images/  frame_number_*.jpg       必須
+  masks/   frame_number_*.jpg       人物マスク (白=有効)
+  imu/     transitions.json idle_spans.json
+  floors/  1F.json 1F.jpg … meta.json   ← meta.json に図面の実寸
+  results/<session>/                 ← 出力はここだけ
+```
+
+```bash
+python -m img_align.tools.recon inspect input=/data/reconstruction  # 点検
+python -m img_align.tools.recon run     input=/data/reconstruction
+python -m img_align.tools.recon run     input=/data/reconstruction \
+    'steps=[anchor,export]' chunking.chunk_size=24
+python -m img_align.tools.recon steps                               # 段の一覧
+```
+
+**段の順序は書いた順ではなく依存で決まる** (`steps.py`)。選んだ段の前提は
+自動で補われ、能力が足りない段は理由つきで skip される
+(明示的に選んだ段が能力不足のときだけエラーで止まる)。
+
+> `floors/meta.json` の `known_width_mm` (最外壁芯間のx方向スパン[mm]) が
+> 無いと図面アンカーは動かない。**壁注釈だけでは px→m が決まらない。**
+
+## 既存7セッション (開発用CLI)
+
 ```bash
 # 本番 (GTなし): 推論 → 手動で階を割当 → アンカー以降
 python -m img_align.pipeline run --session 0912 --segments imu --max-seg 160 --no-eval
@@ -10,22 +41,29 @@ python -m img_align.core.floor_assign --template   # 雛形を編集して階を
 python -m img_align.pipeline run --session 0912 --segments imu --max-seg 160 \
     --post anchor,hier,export,viewer --no-eval
 
-# メイン一発 (prep → chunks → chains → eval)
+# メイン一発 (prep → chains → eval)
 python -m img_align.pipeline run --session 0616
 
 # 後処理込み (図面アンカー+階層移送+点群書き出し+ビューア)
 python -m img_align.pipeline run --session 0616 --post anchor,hier,export,viewer
-
-# 本番モード: GTなしで島計画 (IMU階段検出) + 評価スキップ
-python -m img_align.pipeline run --session 0616 --segments imu --no-eval
 
 python -m img_align.pipeline stages   # 段の説明
 ```
 
 実行環境: ホスト conda env `img_align`(PanoVGGT推論は内部で env `panovggt` を
 subprocess 起動)。`mapany` 後処理のみ docker サービス `mapanything` 内で実行。
-セッションは `--session`(内部では環境変数 `IMG_SESSION` → `config.py` が
-import時に凍結するため、必ずenv設定後にimportされる)。
+
+セッションは環境変数 `IMG_SESSION`。`config.py` が import 時に凍結するので、
+**必ず env 設定後に import される**こと。受け付ける形は3つ:
+
+| 形 | 意味 |
+|---|---|
+| `0912` | 登録済みセッション名 |
+| `/data/reconstruction` | データセットディレクトリ (名前=ディレクトリ名) |
+| `myrun=/data/reconstruction` | 名前を明示 (同じ入力を条件違いで回す) |
+
+子プロセスやコンテナには `config.SESSION` ではなく **`config.SESSION_REF`**
+を渡すこと (`SESSION` は登録後の派生名で、env に戻すと落ちる)。
 
 ---
 
@@ -33,22 +71,28 @@ import時に凍結するため、必ずenv設定後にimportされる)。
 > (図つき。構造・実行コマンド・大量実走の設計・落とし穴)。
 > ここは各段の詳細とモジュール対応表。
 
-## メインの仕組み(パイプライン4段)
+## メインの仕組み
 
 ```
-[1 prep] → [2 chunks] → [3 chains] → [4 eval]
+[prep] → [chains] → [eval]   ＋ 任意後処理 (mapany/bridge/anchor/hier/export)
 ```
 
-### 1. prep — 入力準備(`core/crops`)
+段の定義と依存は `steps.py` の登録表。`core/caps.py` が入力の能力を判定し、
+できない段を理由つきで skip する。
 
-- **入力**: equirectフレーム列(`<物件>/<セッション>/images/`、5376×2688)、
-  人物マスク(`masks/` または seg_ade20k出力)
-- **内容**: 人物マスクの有無を確認する。後処理`mapany`を使う場合のみ、
-  equirectからピンホールクロップ(FOV130°/pitch10°/518px、人物黒塗り)を生成する
-- **出力**: `results/<s>/vidmap/mapany_f130/`(クロップ)+`name_map_*.json`
-  (出力名→元フレーム番号の対応表)
+### 1. prep — 入力準備(`core/ingest` + `core/crops`)
 
-### 2. chunks — 前段モデルのチャンク推論(`core/chunking`+`core/panovggt`)
+- **入力**: equirectフレーム列(`images/`、5376×2688)、人物マスク
+  (`masks/` または seg_ade20k出力)、IMU派生物(`imu/`)
+- **内容**: 入力の `imu/*.json|npz` を `results/<s>/imu/` へコピーし、
+  取り込んだ名前を `_materialized.json` に記録する(次回はそれを消してから
+  張り直す ← `imu_segments` は `exists()` しか見ないので古い残骸が効き続ける)。
+  人物マスクの有無を確認する。後処理`mapany`を使う場合のみ、equirect から
+  ピンホールクロップ(FOV130°/pitch10°/518px、人物黒塗り)を生成する
+- **出力**: `results/<s>/imu/`(取り込み分)、
+  `results/<s>/vidmap/mapany_f130/`(クロップ)+`name_map_*.json`
+
+### 2. chains(前半) — 前段モデルのチャンク推論(`core/chunking`+`core/panovggt`)
 
 - **入力**: フレーム列+人物マスク、島区間ソース(`--segments`で選択):
   - `gt`(開発・評価用、既定): GT軌跡の階ラベル(`eval/gt_traj.load_gt`)
@@ -74,7 +118,7 @@ import時に凍結するため、必ずenv設定後にimportされる)。
   **モデル比較では島を揃えるため`--segments gt`を使うこと**
   (結果は results/REPORT.md。結論=Pi3系に乗り換える理由は無い)
 
-### 3. chains — 島ごとのチャンク連結(`core/chaining`)
+### 3. chains(後半) — 島ごとのチャンク連結(`core/chaining`)
 
 - **入力**: 島台帳と各チャンクの per-frame 点群・ポーズ
 - **内容**: 隣接チャンクが共有する4フレームのローカル点群同士を
@@ -86,6 +130,8 @@ import時に凍結するため、必ずenv設定後にimportされる)。
   `chain_log.json`=連結残差ログ)。座標は非メートル(チャンク0ゲージ)
 
 ### 4. eval — GT軌跡との比較(`eval/frontend`)
+
+能力 `gt` と `scale` の両方が要る。片方でも欠ければこの段は skip される。
 
 - **入力**: 島タグの `global_cameras.npz`、GT軌跡
   (`<物件>/trajectory_points.csv`。未配備の物件のみ手動登録
@@ -99,7 +145,10 @@ import時に凍結するため、必ずenv設定後にimportされる)。
 
 ---
 
-## 任意後処理(--post、全て入力=frontend_benchタグ)
+## 任意後処理(入力はすべて frontend_benchタグ)
+
+新CLIでは `steps=[...]`、互換CLIでは `--post`。**順序は依存で決まる**ので
+書く順は関係ない (`bridge` と `anchor` を両方選べば bridge が先)。
 
 | 名前 | モジュール | アルゴリズム概要 |
 |---|---|---|
@@ -141,15 +190,19 @@ import時に凍結するため、必ずenv設定後にimportされる)。
 
 | パッケージ | 役割 |
 |---|---|
-| `config.py` | セッション/物件レジストリ・パス・SESSION_CFG(唯一のIMG_SESSION読取り元) |
-| `pipeline.py` | メインCLI(上記4段+後処理のオーケストレーション) |
-| `core/` | `panovggt`(チャンク推論subprocess) `panovggt_batch`(一括推論=モデル読込1回) `floor_assign`(手動の階割当) `floor_seq`(IMU遷移からの階決定。2/6セッションのみ) `pi3`(Pi3/Pi3-FT推論、PanoVGGT互換出力) `chunking`(島計画) `chaining`(連結) `crops`(e2pクロップ) `plan_grid`(図面グリッド) `geometry`(Sim3/重力/ヨー統計) `io_ply` |
-| `postproc/` | 上表の後処理+`anchor_score`(候補スコア) `scale_prior`(m_per_unitの供給源) `island_quality`(島の指紋の濃さ。判別力は無かった) `metric_stitch`(図面なしメートル化。不発) `density_map`(壁密度地図) `plan_match`(FFTグリッド照合) `plan_icp`(point-to-line ICP・座標変換ユーティリティ) `anchor`(島アンカー本体・prepare_island) |
-| `eval/` | `anchor_oracle`(候補に正解があるか) `anchor_confidence`(GT無しで当たりを見分ける指標) `anchor_overlay`(アンカー素の出力) `density_view`(密度地図) `outdoor_proxy`(屋外島の暫定判定) `scale_probe` `gt_traj`(GT読込・MM_PER_PX・GTは物件ごとの trajectory_points.csv) `frontend`(フィットATE) `chunk_cmp`(チャンク単体採点+`gt_interp`) `floor_overlay`(階別の図面オーバーレイ比較) `overview`(島別色分け) `island_diag`(島内診断) `depth`(壁面残差で点群品質比較) |
+| `config.py` | セッション/物件レジストリ・パス・SESSION_CFG(唯一のIMG_SESSION読取り元)。IMG_SESSION はパスも受け、`_register_dataset` がその場で Property を組む |
+| `steps.py` | **段の登録表と依存解決** (`needs`/`before`/`caps` + graphlib)。順序はここが決める |
+| `api.py` | 外部から呼ぶ入口 (`run` = 子プロセス / `run_inprocess` / `plan`) |
+| `pipeline.py` | 既存7セッション用の互換CLI (引数を steps.py のオプションへ翻訳するだけ) |
+| `conf/` | hydra設定 (`recon.yaml` = 入力ディレクトリ実行 / `ext_batch.yaml` = 大量実走) |
+| `core/` | `caps`(入力の能力判定) `ingest`(入力の imu/ を results へ台帳つきコピー) `panovggt`(チャンク推論subprocess) `panovggt_batch`(一括推論=モデル読込1回) `floor_assign`(手動の階割当) `floor_seq`(IMU遷移からの階決定。2/6セッションのみ) `pi3`(Pi3/Pi3-FT推論、PanoVGGT互換出力) `chunking`(島計画) `chaining`(連結) `crops`(e2pクロップ) `plan_grid`(図面グリッド) `geometry`(Sim3/重力/ヨー統計) `io_ply` |
+| `postproc/` | 上表の後処理+`anchor_run`(全島を並列アンカー) `mapany_run`(mapany起動) `anchor_score`(候補スコア) `scale_prior`(m_per_unitの供給源) `island_quality`(島の指紋の濃さ。判別力は無かった) `metric_stitch`(図面なしメートル化。不発) `density_map`(壁密度地図) `plan_match`(FFTグリッド照合) `plan_icp`(point-to-line ICP・座標変換ユーティリティ) `anchor`(島アンカー本体・prepare_island) |
+| `eval/` | `anchor_oracle`(候補に正解があるか) `anchor_confidence`(GT無しで当たりを見分ける指標) `anchor_overlay`(アンカー素の出力) `density_view`(密度地図) `outdoor_proxy`(屋外島の暫定判定) `scale_probe` `gt_traj`(GT読込・`mm_per_px()`=遅延評価の関数・GTは物件ごとの trajectory_points.csv) `frontend`(フィットATE) `chunk_cmp`(チャンク単体採点+`gt_interp`) `floor_overlay`(階別の図面オーバーレイ比較) `overview`(島別色分け) `island_diag`(島内診断) `depth`(壁面残差で点群品質比較) |
 | `out/` | `export` `viewer` |
-| `tools/` | `align_tool`(ブラウザ手動登録) `mask_eval_tool` `boundary_mask`(敷地マスク) `model_bench`(3モデル×窓の比較ドライバ) |
+| `tools/` | `recon`(**入力ディレクトリから回すCLI**) `_hydra`(hydra読込の共通部) `ext_batch`(大量実走) `align_tool`(ブラウザ手動登録) `mask_eval_tool` `boundary_mask`(敷地マスク) `model_bench`(3モデル×窓の比較ドライバ) |
 | `gs/` `mesh/` | Gaussian Splatting / メッシュ・衝突モデル の各系統 |
 | `imu/` | insv抽出(`extract`)・姿勢(`attitude`)・**階段検出(`transitions`=stairnet CNN、島計画の本番ソース)**・**フレーム時刻(`frame_times`→`timeline`)**ほか |
+| `tests/` | pytest 無しでも走る検査 (`check_config`=凍結値スナップショット / `check_imports`=importスモーク) |
 | `legacy/` | 退役スパイク・実験(動態保存。新規参照は禁止) |
 
 ## 旧→新モジュール対応(2026-10-07再編)
@@ -169,6 +222,19 @@ import時に凍結するため、必ずenv設定後にimportされる)。
 | export_aligned2 / backend_viz | out.export / viewer |
 | SESSION_CFG・BENCH_DIR・OUT_DIR・CAM_HEIGHT_M | config |
 | その他(unbend, opening_*, joint_refine, temporal_fuse, …) | legacy.* |
+
+## 旧→新対応(2026-10-19 実行インタフェース再編)
+
+| 旧 | 新 |
+|---|---|
+| `pipeline.stage_chunks_chains` ほか段の本体 | `steps.py` の登録表 (`_prep`/`_chains`/…) |
+| `pipeline.post_anchor` / `_anchor_one` | `postproc.anchor_run.anchor_islands` |
+| `pipeline.post_mapany` | `postproc.mapany_run.run_mapany` |
+| `--post` を書いた順に実行 | `steps.resolve` が依存で順序を決める |
+| `eval.gt_traj.MM_PER_PX`(import時に評価する定数) | `eval.gt_traj.mm_per_px()`(遅延+キャッシュ) |
+| `config._register_ext`(ext/ 専用) | `config._register_dataset`(任意のディレクトリ) |
+| `IMG_SESSION` はセッション名のみ | 名前 / パス / `名前=パス` の3形 |
+| 入力の imu/ は手で置く | `core.ingest.materialize_imu`(台帳つき) |
 
 ## 確立済みの運用レシピ(実測の詳細は results/REPORT.md)
 

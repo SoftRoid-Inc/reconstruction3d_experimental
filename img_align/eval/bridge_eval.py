@@ -28,18 +28,22 @@ import numpy as np
 from img_align.core.bridge import (bridge_transform, consensus,  # noqa: F401
                                    islands_at, junction_kind, junctions,
                                    manifest_islands, run_bridge, transported)
-from img_align.eval.gt_traj import MM_PER_PX, load_gt
+from img_align.eval.gt_traj import mm_per_px, load_gt
 
 # 壁注釈の無い物件 (ext/) は mm/px が出ないので、誤差は**図面幅で正規化**して
 # 返す (このデータセット本来の単位)。既存物件換算で 0.01 ≈ 0.30m
-_M = (MM_PER_PX / 1000) if MM_PER_PX else None
+# import時に評価しない (mm_per_px() は図面を読むので import の副作用にしない)
+def _m():
+    v = mm_per_px()
+    return (v / 1000) if v else None
 
 
 def _unit():
     """px -> 表示単位の係数と単位名"""
     from img_align.config import PROP
-    if _M:
-        return _M, "m"
+    m = _m()
+    if m:
+        return m, "m"
     return 1.0 / PROP.drawing_wh[0], "図面幅"
 
 

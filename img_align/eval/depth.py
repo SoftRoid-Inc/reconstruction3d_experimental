@@ -28,7 +28,7 @@ from scipy.spatial import cKDTree
 from img_align.config import BENCH_DIR
 from img_align.core.geometry import rotation_to_y
 from img_align.eval.frontend import fit2d
-from img_align.eval.gt_traj import MM_PER_PX, load_gt
+from img_align.eval.gt_traj import mm_per_px, load_gt
 from img_align.core.io_ply import read_ply_xyzrgb
 from img_align.postproc.plan_icp import wall_face_segments_px
 
@@ -55,8 +55,8 @@ def fit_to_gt(frames, positions, poses, gt):
     for i, f in enumerate(frames):
         g = min(gt, key=lambda k: abs(k - f))
         if abs(g - f) <= 3:
-            gt_xy.append([gt[g]["x_px"] * MM_PER_PX / 1000,
-                          gt[g]["y_px"] * MM_PER_PX / 1000])
+            gt_xy.append([gt[g]["x_px"] * mm_per_px() / 1000,
+                          gt[g]["y_px"] * mm_per_px() / 1000])
             used.append(i)
     gt_xy = np.array(gt_xy)
     best = None
@@ -91,7 +91,7 @@ def wall_metrics(draw_pts, cam_h, segs_px, label):
     """カメラ高さ帯の点の壁面距離統計"""
     band = (draw_pts[:, 2] > cam_h - BAND_HALF_M) & \
            (draw_pts[:, 2] < cam_h + BAND_HALF_M)
-    pts = draw_pts[band][:, :2] * 1000 / MM_PER_PX          # px
+    pts = draw_pts[band][:, :2] * 1000 / mm_per_px()          # px
     # 面ラインを2px間隔でサンプルしてKDTree
     samples = []
     for x1, y1, x2, y2 in segs_px:
@@ -100,7 +100,7 @@ def wall_metrics(draw_pts, cam_h, segs_px, label):
                                  np.linspace(y1, y2, n)], axis=1))
     tree = cKDTree(np.concatenate(samples))
     d_px, _ = tree.query(pts, k=1)
-    d_m = np.minimum(d_px * MM_PER_PX / 1000, DIST_CAP_M)
+    d_m = np.minimum(d_px * mm_per_px() / 1000, DIST_CAP_M)
     return {
         "source": label,
         "n_band_pts": int(len(pts)),

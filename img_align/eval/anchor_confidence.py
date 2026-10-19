@@ -29,7 +29,7 @@ import math
 import numpy as np
 
 from img_align.config import BENCH_DIR, OUT_DIR, SESSION
-from img_align.eval.gt_traj import MM_PER_PX, load_gt
+from img_align.eval.gt_traj import mm_per_px, load_gt
 
 
 def gt_error(tag, gt):
@@ -41,7 +41,7 @@ def gt_error(tag, gt):
     e = [math.dist(xy, (gt[f]["x_px"], gt[f]["y_px"]))
          for n, xy in tr.items()
          if (f := int(n.replace("frame_", ""))) in gt]
-    return float(np.median(e)) * MM_PER_PX / 1000 if len(e) >= 4 else None
+    return float(np.median(e)) * mm_per_px() / 1000 if len(e) >= 4 else None
 
 
 def row(tag, gt, suffix="_corners"):

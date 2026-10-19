@@ -17,7 +17,7 @@ from scipy import ndimage
 
 from img_align.core.io_ply import read_ply_xyzrgb
 from img_align.config import (FRAMES_DIR, GROUP_IDS, PROJECT_ROOT, PROP,
-                              RESULTS_DIR, THIRD_PARTY)
+                              RESULTS_DIR, THIRD_PARTY, frame_name)
 from img_align.legacy.sample_frames import load_selected
 
 PCD_DIR = RESULTS_DIR / "pcd"
@@ -43,7 +43,7 @@ def build_mask(name):
     無ければseg_ade20kのperson結果から作る。どちらも無ければNone"""
     if PROP.person_mask_dir is not None:
         num = int("".join(c for c in name if c.isdigit()))
-        p = PROP.person_mask_dir / f"frame_number_{num:06d}.jpg"
+        p = PROP.person_mask_dir / frame_name(num)
         if not p.exists():
             return None
         img = Image.open(p).convert("L").resize(MASK_WH, Image.BILINEAR)
@@ -69,7 +69,7 @@ def select_entries(frames_spec):
     start, end, step = (int(v) for v in frames_spec.split(":"))
     entries = []
     for i in range(start, end, step):
-        p = FRAMES_DIR / f"frame_number_{i:06d}.jpg"
+        p = FRAMES_DIR / frame_name(i)
         if p.exists():
             entries.append({"index": i, "path": str(p)})
     return entries

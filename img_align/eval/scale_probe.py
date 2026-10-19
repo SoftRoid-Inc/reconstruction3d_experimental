@@ -24,7 +24,8 @@ import json
 
 import numpy as np
 
-from img_align.config import BENCH_DIR, CAM_HEIGHT_M, FRAMES_DIR, RESULTS_DIR
+from img_align.config import (BENCH_DIR, CAM_HEIGHT_M, FRAMES_DIR,
+                              RESULTS_DIR, frame_name)
 from img_align.core.geometry import rotation_to_y
 from img_align.core.io_ply import read_ply_xyzrgb
 
@@ -74,7 +75,7 @@ def chunk_appearance(cdir):
     diffs, edges = [], []
     prev = None
     for n in names:
-        p = FRAMES_DIR / f"frame_number_{int(n.replace('frame_', '')):06d}.jpg"
+        p = FRAMES_DIR / frame_name(int(n.replace("frame_", "")))
         if not p.exists():
             continue
         a = np.asarray(Image.open(p).convert("L")

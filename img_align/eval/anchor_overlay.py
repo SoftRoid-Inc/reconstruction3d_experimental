@@ -21,7 +21,7 @@ import numpy as np
 from PIL import Image
 
 from img_align.config import BENCH_DIR, OUT_DIR, PROP, SESSION
-from img_align.eval.gt_traj import MM_PER_PX, load_gt
+from img_align.eval.gt_traj import mm_per_px, load_gt
 
 PAD_PX = 160
 COLORS = ("#1f77b4", "#2ca02c", "#d62728", "#9467bd", "#ff7f0e", "#17becf")
@@ -46,7 +46,7 @@ def gt_xy(gt, floor):
 def err_vs_gt(fr, xy, gt):
     e = [np.linalg.norm(xy[i] - [gt[f]["x_px"], gt[f]["y_px"]])
          for i, f in enumerate(fr) if f in gt]
-    return float(np.median(e)) * MM_PER_PX / 1000 if len(e) >= 4 else None
+    return float(np.median(e)) * mm_per_px() / 1000 if len(e) >= 4 else None
 
 
 def main():

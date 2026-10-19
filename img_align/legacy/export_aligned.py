@@ -13,7 +13,7 @@ import numpy as np
 
 from img_align.config import RESULTS_DIR
 from img_align.core.geometry import camera_centers, gravity_from_cameras, rotation_to_y
-from img_align.eval.gt_traj import MM_PER_PX
+from img_align.eval.gt_traj import mm_per_px
 from img_align.core.plan_grid import PlanGrid
 from img_align.core.io_ply import read_ply_xyzrgb
 from img_align.core.panovggt import PCD_DIR
@@ -53,8 +53,8 @@ def export():
                           (p[:, 0] - d2["origin"][0]) / d2["cell_units"]], axis=1)
         pc = transform_pts(cells, s, th, t)  # plan cell (row, col)
         # 図面絶対px → メートル (壁参照点と同じ座標系に揃える)
-        plan = np.stack([(grid.y0_px + pc[:, 0] * grid.cell_px) * MM_PER_PX / 1000,
-                         (grid.x0_px + pc[:, 1] * grid.cell_px) * MM_PER_PX / 1000],
+        plan = np.stack([(grid.y0_px + pc[:, 0] * grid.cell_px) * mm_per_px() / 1000,
+                         (grid.x0_px + pc[:, 1] * grid.cell_px) * mm_per_px() / 1000],
                         axis=1)
         # 高さ: 床スラブピーク (joint_refineで推定) を z=0 に
         h = (p[:, 1] - tr["floor_y_units"]) * mpu + z_off
@@ -67,7 +67,7 @@ def export():
     # 図面の壁 (参照用の点カーテン)
     for floor, z_off, color in (("1F", 0.0, (60, 90, 255)),
                                 ("2F", 2.9, (90, 200, 255))):
-        segs = wall_segments_px(floor) * MM_PER_PX / 1000
+        segs = wall_segments_px(floor) * mm_per_px() / 1000
         pts = []
         for x1, y1, x2, y2 in segs:
             n = max(int(np.hypot(x2 - x1, y2 - y1) / 0.05), 2)

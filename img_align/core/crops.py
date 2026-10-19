@@ -30,7 +30,8 @@ def load_person_mask(frame_name, dilate=6):
     if seg_p.exists():
         person = np.load(seg_p)["labels"] == GROUP_IDS["person"]
     else:
-        jpg = (PROP.person_mask_dir / f"frame_number_{fr:06d}.jpg"
+        from img_align.config import frame_name as _fname
+        jpg = (PROP.person_mask_dir / _fname(fr)
                if PROP.person_mask_dir else None)
         if jpg is None or not jpg.exists():
             return None

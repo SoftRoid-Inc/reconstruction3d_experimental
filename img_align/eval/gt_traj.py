@@ -8,6 +8,7 @@ GTは物件ごとに置く。28-BBBBBは2026-10-13に正式GTが入り、それ�
 評価対象: results/fuse/fused.json (PF統合軌跡) / results/loc*/summary.json (単フレーム照合)
 """
 import csv
+import functools
 import json
 import math
 
@@ -22,11 +23,20 @@ from img_align.config import PROP, PROJECT_ROOT, RESULTS_DIR, SESSION
 from img_align.core.plan_grid import ZUMEN_DIR
 
 def gt_dir(session=None):
-    """GT CSV群の置き場。物件ごとに持つ (無ければ28-AAAAAを使う旧挙動)"""
+    """GT CSV群の置き場。物件ごとに持つ
+
+    28-AAAAA へのフォールバックは**プロジェクト内の物件だけ**に効かせる。
+    外部データセット (入力ディレクトリ渡し) でこれを許すと、GTを持たない
+    新しい建物を 28-AAAAA のGTで評価して例外ゼロで完走する
+    (2026-10-09に実際に踏んだ事故の経路)。
+    """
     from img_align.config import PROPERTY
     root = (PROPERTY[session] if session else PROP).root
-    return root if (root / "trajectory_points.csv").exists() \
-        else PROJECT_ROOT / "28-AAAAA"
+    if (root / "trajectory_points.csv").exists():
+        return root
+    if PROJECT_ROOT in root.parents or root == PROJECT_ROOT:
+        return PROJECT_ROOT / "28-AAAAA"
+    return root     # 外部データセット: 存在しないので後段が FileNotFoundError
 
 
 GT_DIR = gt_dir()
@@ -34,21 +44,51 @@ OUT_DIR = RESULTS_DIR / "eval_gt"
 DRAWING_W, DRAWING_H = PROP.drawing_wh  # 図面画像サイズ (yは下原点→上原点に反転が必要)
 
 
-def _mm_per_px():
-    """図面実測スケール。PROPに実測値が無ければ 1F GT JSON から導出 (未注釈ならNone)"""
+def _plan_json():
+    """スケール導出に使う図面JSON (階名, Path)。無ければ None
+
+    「1F」決め打ちをやめた。B1F や 2F から始まる部分スキャンでは 1F.json が
+    存在せず、黙って mm/px=None に落ちていた。
+    """
+    if not ZUMEN_DIR.is_dir():
+        return None
+    cands = sorted(p for p in ZUMEN_DIR.glob("*.json") if len(p.stem) <= 4)
+    if not cands:
+        return None
+    pick = next((p for p in cands if p.stem == "1F"), cands[0])
+    return pick.stem, pick
+
+
+@functools.lru_cache(maxsize=None)
+def mm_per_px():
+    """図面実測スケール [mm/px]。導出できなければ None
+
+    **import 時に評価してはいけない** (旧 `MM_PER_PX` 定数)。図面JSONが
+    labelme でない・`known_width_mm` が未設定といった入力で例外が飛ぶと、
+    このモジュールを top-level import する20モジュールと、`plan_icp` 経由の
+    二次伝播16モジュール (= アンカー経路まるごと) が import 不能になる。
+    """
     if PROP.mm_per_px is not None:
         return PROP.mm_per_px
+    if PROP.known_width_mm is None:
+        return None             # 図面の実寸が無ければ px→m は決められない
+    found = _plan_json()
+    if found is None:
+        return None
+    floor, path = found
+    kw = PROP.known_width_mm
+    kw = kw.get(floor) if isinstance(kw, dict) else kw
+    if kw is None:
+        return None
     try:
         from recon3d.calibrate import scale_mm_per_px
         from recon3d.loader import load_labelme
-        plan = load_labelme(ZUMEN_DIR / "1F.json", "1F")
-        kw = PROP.known_width_mm
-        return scale_mm_per_px(plan, kw["1F"] if isinstance(kw, dict) else kw)
-    except FileNotFoundError:
+        return scale_mm_per_px(load_labelme(path, floor), kw)
+    except (FileNotFoundError, ValueError, KeyError, TypeError,
+            ZeroDivisionError) as e:
+        print(f"[gt] mm/px を {path.name} から導出できない ({type(e).__name__}"
+              f": {e}) -> None")
         return None
-
-
-MM_PER_PX = _mm_per_px()  # 0828/0312: 11.968 (recon3d実測)
 
 # 階のフレーム範囲 (0828セッション。後方互換用。一般にはload_gtがCSVから導出)
 FLOOR_RANGES = [(0, 233, "1F"), (234, 411, "2F"), (412, 453, "1F")]
@@ -157,13 +197,18 @@ def evaluate_track(name, samples, gt):
     """samples: [{frame, floor, x_px, y_px}] を評価"""
     floor_ok, errs, errs_all = 0, [], []
     n = 0
+    mpx = mm_per_px()
+    if mpx is None:
+        raise ValueError(
+            "mm/px が導出できないので誤差をメートルで出せない。"
+            "図面の壁注釈 (labelme) と known_width_mm の両方が要る")
     for s in samples:
         g = gt_at(gt, s["frame"])
         if g is None:
             continue
         n += 1
         e = math.dist((s["x_px"], s["y_px"]), (g["x_px"], g["y_px"])) \
-            * MM_PER_PX / 1000
+            * mpx / 1000
         errs_all.append(e)
         if s["floor"] == g["floor"]:
             floor_ok += 1

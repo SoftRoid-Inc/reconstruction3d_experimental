@@ -111,10 +111,10 @@ def from_mapany(tag):
 def from_gt(tag, session=None):
     """GT軌跡との相似フィット (上限確認用。本番では使えない)"""
     from img_align.eval.chunk_cmp import gt_interp
-    from img_align.eval.gt_traj import MM_PER_PX, load_gt
+    from img_align.eval.gt_traj import mm_per_px, load_gt
     fr, xy = island_xz(tag)
     gt = load_gt(session)
-    g, idx = gt_interp(gt, fr, MM_PER_PX)
+    g, idx = gt_interp(gt, fr, mm_per_px())
     s, n = _fit_scale(fr[idx], xy[idx], fr[idx], g)
     if s is None:
         raise RuntimeError(f"{tag}: GT対応が{n}本しかない")

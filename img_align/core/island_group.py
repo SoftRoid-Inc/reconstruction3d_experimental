@@ -50,9 +50,16 @@ def _eye():
 
 
 def build_groups(modes=MODES, thresh=CONSENSUS_OK_M, skip_cross_floor=False,
-                 verbose=True):
-    """島を群れにまとめる。[(島リスト, {tag: 群れ先頭ゲージへの変換})]"""
-    man = manifest_islands()
+                 verbose=True, manifest_name=None):
+    """島を群れにまとめる。[(島リスト, {tag: 群れ先頭ゲージへの変換})]
+
+    `manifest_name` は `--model pi3` / `--manifest-out` で既定から外れる。
+    islands_at 等が間接的に同じファイルを読むので bridge 側の既定も揃える
+    (揃えないと「群れ化は新マニフェスト、橋の両側判定は旧マニフェスト」と
+    いう食い違いが起きる)。
+    """
+    from img_align.core.bridge import set_manifest_name
+    man = manifest_islands(set_manifest_name(manifest_name))
     if not man:
         return []
     groups, cur, T = [], [man[0]], {man[0]["tag"]: _eye()}

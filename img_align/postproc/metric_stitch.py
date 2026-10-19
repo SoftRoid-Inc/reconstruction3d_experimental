@@ -183,13 +183,13 @@ def _finish(traj, diag, ref, args):
     res = {"ref": ref, "n_frames": len(traj), "islands": diag}
 
     if args.eval:
-        from img_align.eval.gt_traj import MM_PER_PX, load_gt
+        from img_align.eval.gt_traj import mm_per_px, load_gt
         gt = load_gt()
         fr = np.array(sorted(traj))
         est = np.array([traj[f] for f in fr])
         m = np.array([f in gt for f in fr])
         g = np.array([[gt[f]["x_px"], gt[f]["y_px"]]
-                      for f in fr[m]]) * MM_PER_PX / 1000
+                      for f in fr[m]]) * mm_per_px() / 1000
         if m.sum() >= 8:
             T, s, e, _ = fit_sim2(est[m], g)
             err = np.linalg.norm(T(est[m] * [1, 1]) - g, axis=1)

@@ -19,7 +19,7 @@ import numpy as np
 from img_align.config import BENCH_DIR
 from img_align.config import SESSION
 from img_align.core.geometry import rotation_to_y
-from img_align.eval.gt_traj import MM_PER_PX, load_gt
+from img_align.eval.gt_traj import mm_per_px, load_gt
 
 
 def stair_ranges():
@@ -63,7 +63,15 @@ def evaluate(tag, gt, frame_range=None):
     # GTは線形補間する。最近傍スナップ(旧実装)だと1フレームのずれが
     # 0.5s×0.6m/s = 約0.3mの誤差として乗り、GT欠損区間でATEを大きく水増しした
     from img_align.eval.chunk_cmp import gt_interp
-    gt_xy, used = gt_interp(gt, frames, MM_PER_PX)
+    mpx = mm_per_px()
+    if mpx is None:
+        # ATEはメートルで出す約束なので、px→m が決まらない入力では評価しない。
+        # 壁注釈だけでは足りず**図面の実寸 (known_width_mm) も要る**
+        raise ValueError(
+            "mm/px が無いので ATE を測れない (図面の labelme 注釈と "
+            "floors/meta.json の known_width_mm の両方が必要)。"
+            "評価を飛ばすなら eval ステップを外してください")
+    gt_xy, used = gt_interp(gt, frames, mpx)
 
     best = None
     for mirror in (False, True):

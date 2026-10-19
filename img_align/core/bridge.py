@@ -26,7 +26,8 @@ import json
 
 import numpy as np
 
-from img_align.config import BENCH_DIR, FRAMES_DIR, IMU_DIR, SESSION
+from img_align.config import (BENCH_DIR, FRAMES_DIR, IMU_DIR, SESSION,
+                              frame_name)
 from img_align.core.chunking import CHUNK_SIZE, imu_segments
 from img_align.core.floor_assign import apply as apply_floor
 from img_align.core.geometry import apply, compose, sim3_umeyama
@@ -115,9 +116,9 @@ def run_frames(frames, name, use_mask=True):
     out = BRIDGE_DIR / f"{SESSION}_{name}"
     if not (out / "cameras.npz").exists():
         entries = [{"index": f,
-                    "path": str(FRAMES_DIR / f"frame_number_{f:06d}.jpg")}
+                    "path": str(FRAMES_DIR / frame_name(f))}
                    for f in frames
-                   if (FRAMES_DIR / f"frame_number_{f:06d}.jpg").exists()]
+                   if (FRAMES_DIR / frame_name(f)).exists()]
         run_panovggt(entries, out, use_mask=use_mask)
     cam = np.load(out / "cameras.npz")
     names = [str(n) for n in cam["names"]]
@@ -139,10 +140,10 @@ def run_bridge(a_end, b_start, mode="span", use_mask=True):
     out = BRIDGE_DIR / f"{SESSION}_{a_end}_{b_start}_{mode}"
     if not (out / "cameras.npz").exists():
         entries = [{"index": f,
-                    "path": str(FRAMES_DIR / f"frame_number_{f:06d}.jpg")}
+                    "path": str(FRAMES_DIR / frame_name(f))}
                    for f in frames]
         entries = [e for e in entries if FRAMES_DIR.joinpath(
-            f"frame_number_{e['index']:06d}.jpg").exists()]
+            frame_name(e["index"])).exists()]
         run_panovggt(entries, out, use_mask=use_mask)
     cam = np.load(out / "cameras.npz")
     names = [str(n) for n in cam["names"]]
@@ -150,9 +151,24 @@ def run_bridge(a_end, b_start, mode="span", use_mask=True):
     return {int(n.replace("frame_", "")): pos[i] for i, n in enumerate(names)}
 
 
-def manifest_islands(name="pv_manifest.json"):
+# 島マニフェストのファイル名。`--model pi3` や `--manifest-out` で既定から
+# 外れる。islands_at / bridge_transform / consensus が間接的に読むので、
+# 引数で配るのではなく**ここを差し替える** (set_manifest_name)
+MANIFEST_NAME = "pv_manifest.json"
+
+
+def set_manifest_name(name):
+    """以降 manifest_islands() が読むファイルを切り替える (None なら既定のまま)"""
+    global MANIFEST_NAME
+    if name:
+        MANIFEST_NAME = name
+    return MANIFEST_NAME
+
+
+def manifest_islands(name=None):
     """階が割り当たった島を開始フレーム順に返す"""
-    man = apply_floor(json.loads((BENCH_DIR / name).read_text()), quiet=True)
+    p = BENCH_DIR / (name or MANIFEST_NAME)
+    man = apply_floor(json.loads(p.read_text()), quiet=True)
     return sorted([m for m in man if m.get("floor")], key=lambda m: m["a"])
 
 

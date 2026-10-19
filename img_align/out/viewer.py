@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from img_align.config import BENCH_DIR
-from img_align.eval.gt_traj import MM_PER_PX
+from img_align.eval.gt_traj import mm_per_px
 from img_align.core.io_ply import read_ply_xyzrgb
 from img_align.postproc.plan_icp import wall_segments_px
 
@@ -36,7 +36,7 @@ def render_check(xyz, rgb, sfx=SFX):
         p = xyz[m][::2]
         c = rgb[m][::2] / 255.0
         ax.scatter(p[:, 0], p[:, 1], s=0.3, c=c, linewidths=0)
-        segs = wall_segments_px(floor) * MM_PER_PX / 1000
+        segs = wall_segments_px(floor) * mm_per_px() / 1000
         for x1, y1, x2, y2 in segs:
             ax.plot([x1, x2], [y1, y2], "-", color="cyan", lw=1.5, alpha=0.9)
         ax.set_aspect("equal")

@@ -1,0 +1,62 @@
+# 外部入力ディレクトリからパイプラインを回す設定 (hydra)
+#
+#   python -m img_align.tools.recon run input=/data/reconstruction
+#   python -m img_align.tools.recon run input=/data/reconstruction \
+#       'steps=[anchor,export]' chunking.chunk_size=24
+#   python -m img_align.tools.recon inspect input=/data/reconstruction
+#
+# 期待する入力の構成 (外部パイプラインが用意する):
+#   <input>/images/   frame_number_*.jpg          必須
+#          /masks/    frame_number_*.jpg          人物マスク (白=有効)
+#          /imu/      transitions.json idle_spans.json   IMU派生物
+#          /floors/   1F.json 1F.jpg … meta.json  間取り図ラベル
+#          /results/<session>/                    出力 (ここだけ書く)
+#
+# floors/meta.json には**図面の実寸**を書く。壁注釈だけでは px→m が
+# 決まらず図面アンカーは動かない:
+#   {"known_width_mm": {"1F": 13877.5, "2F": 13877.5, "3F": 11375.0}}
+
+# 入力ディレクトリ (必須)
+input: null
+# 出力の分け目。null なら入力ディレクトリ名
+session: null
+
+# 走らせる段。前提は自動で補われる (anchor -> prep, chains も走る)。
+# 一覧は `python -m img_align.tools.recon steps`
+steps: [prep, chains, anchor, export]
+
+# 島区間ソース: imu=IMU階段検出(本番・GTフリー) / gt=GT軌跡CSV(開発)
+segments: imu
+
+chunking:
+  max_seg: 160        # 島の最大フレーム数 (0で分割なし)
+  stride: null        # null=既定(12)。別ディレクトリ chunks_s<N> を作る
+  chunk_size: null    # null=既定(16)
+  model: pv           # pv=PanoVGGT / pi3 / holo
+  manifest_out: null  # null=<model>_manifest.json
+  use_idle: true      # 静止区間で島を切る
+  yaw_fix: false      # 方位ロック撮影のチャンク内回転を修復してから再チェーン
+  crops: false        # mapany 用のピンホールクロップを作る
+
+posegraph:
+  prefix: pg_         # 出力タグの接頭辞 (frontend_bench/pg_<島タグ>/)
+  yaw_w: null         # null=既定。逐次エッジのヨー残差の重み
+  loops: true         # 再訪ループ拘束。false だと逐次連結と同じ解になる
+
+bridge:
+  modes: null         # null=既定 [n8s1, n8s2, n8s4]。先頭が採用する変換
+  thresh: null        # null=既定。方式間の一致度[m]がこれ未満の切れ目だけ繋ぐ
+  skip_cross_floor: false   # 階またぎは橋を試さない (推論を約37%節約)
+
+anchor:
+  jobs: null          # null=CPU数/4。島ごとに独立なのでプロセス並列
+
+export:
+  viewer: true        # 確認画像 + WebGLビューアも出す
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  job:
+    chdir: false

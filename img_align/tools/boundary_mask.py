@@ -22,7 +22,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 from scipy import ndimage
 
-from img_align.config import PROP, RESULTS_DIR, SESSION
+from img_align.config import PROP, RESULTS_DIR, SESSION, frame_name
 
 BOUNDARY_LABEL = "boundary"
 CELL_M = 0.02        # 境界ラスタの解像度
@@ -233,9 +233,9 @@ def colmap_fallback_poses(missing_frs):
 
 
 def cmd_generate(args):
-    from img_align.eval.gt_traj import MM_PER_PX
+    from img_align.eval.gt_traj import mm_per_px
     from img_align.gs.gs_world import frame_poses_drawing
-    assert MM_PER_PX is not None, "図面GT (1F.json) が未注釈: スケールを導出できない"
+    assert mm_per_px() is not None, "図面GT (1F.json) が未注釈: スケールを導出できない"
     MASK_OUT_DIR.mkdir(parents=True, exist_ok=True)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -255,15 +255,15 @@ def cmd_generate(args):
 
     meta = {"session": SESSION, "margin_m": MARGIN_M, "d_max_m": D_MAX_M,
             "erode_px": ERODE_PX, "cell_m": CELL_M,
-            "mm_per_px": MM_PER_PX, "frames": {}, "skipped": []}
+            "mm_per_px": mm_per_px(), "frames": {}, "skipped": []}
     for i, num in enumerate(frames):
-        name = f"frame_number_{num:06d}"
+        name = frame_name(num, "")
         fr = poses.get(num)
         white_low = None
         if fr is not None:
             floor = fr["isl"]["floor"]
             if floor not in lookups:
-                lookups[floor] = BoundaryLookup(floor, MM_PER_PX)
+                lookups[floor] = BoundaryLookup(floor, mm_per_px())
                 print(f"boundary[{floor}]: {lookups[floor].area_m2:.0f} m^2")
             if dirs is None:
                 p0 = (fr["chunk_dir"] / "panovggt_out" / "depth"
@@ -387,11 +387,11 @@ def cmd_anchor_traj(args):
         axis=1)
 
     # ターゲット: 境界ポリゴン (grid cell座標) を WALK_OFF_M 内側へ収縮したリング
-    from img_align.eval.gt_traj import MM_PER_PX
+    from img_align.eval.gt_traj import mm_per_px
     poly_px = load_boundary_px(floor)
     poly_cell = np.stack([(poly_px[:, 1] - grid.y0_px) / grid.cell_px,
                           (poly_px[:, 0] - grid.x0_px) / grid.cell_px], axis=1)
-    m_per_cell = grid.cell_px * MM_PER_PX / 1000
+    m_per_cell = grid.cell_px * mm_per_px() / 1000
     ring_tgt = _offset_convex(poly_cell, WALK_OFF_M / m_per_cell)
     segs = np.concatenate([ring_tgt, np.roll(ring_tgt, -1, axis=0)], axis=1)
 
@@ -465,7 +465,7 @@ def cmd_anchor_transfer(args):
     (単独グリッド照合は足場ノイズ等で階ごとに偽解を出しやすい)"""
     from img_align.config import OUT_DIR
     from img_align.postproc.anchor import prepare_island
-    from img_align.eval.gt_traj import MM_PER_PX
+    from img_align.eval.gt_traj import mm_per_px
     from img_align.core.plan_grid import PlanGrid
     from img_align.postproc.plan_icp import icp_to_walls, segs_to_cells, transform_pts, wall_segments_px
     from img_align.config import BENCH_DIR
@@ -534,7 +534,7 @@ def cmd_anchor_transfer(args):
                 cut = np.percentile(dmin, 60)
                 sel = dmin <= cut
                 t2 = t2 + np.median(dv[np.arange(len(P)), j][sel], axis=0)
-            m_per_cell = grid.cell_px * MM_PER_PX / 1000
+            m_per_cell = grid.cell_px * mm_per_px() / 1000
             resid = float(np.median(dmin[sel])) * m_per_cell
         print(f"{tag} ({floor}): 転写 th={math.degrees(thB)%360:.0f}° "
               f"→ ICP resid {resid:.3f}m (dth {math.degrees(th2-thB):+.1f}°)")
@@ -558,7 +558,7 @@ def cmd_viz(args):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from img_align.eval.gt_traj import MM_PER_PX
+    from img_align.eval.gt_traj import mm_per_px
     from img_align.gs.gs_world import frame_poses_drawing
     from img_align.core.plan_grid import ZUMEN_DIR
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -572,9 +572,9 @@ def cmd_viz(args):
     axes = np.atleast_1d(axes)
     for ax, floor in zip(axes, floors):
         bg = Image.open(ZUMEN_DIR / f"{floor}.jpg").convert("L")
-        ext = (0, bg.width * MM_PER_PX / 1000, bg.height * MM_PER_PX / 1000, 0)
+        ext = (0, bg.width * mm_per_px() / 1000, bg.height * mm_per_px() / 1000, 0)
         ax.imshow(bg, cmap="gray", extent=ext, alpha=0.6)
-        poly = load_boundary_px(floor) * MM_PER_PX / 1000
+        poly = load_boundary_px(floor) * mm_per_px() / 1000
         ax.plot(np.append(poly[:, 0], poly[0, 0]),
                 np.append(poly[:, 1], poly[0, 1]), "g-", lw=2, label="boundary")
         pf = [p for p in poses if p["isl"]["floor"] == floor]
@@ -594,8 +594,8 @@ def cmd_viz(args):
     default = [f for f in (0, 5, 10, 15, 30, 60, 90, 120, 150, 180, 200, 215)]
     sel = [int(v) for v in args.samples.split(",")] if args.samples else default
     for num in sel:
-        mp = MASK_OUT_DIR / f"frame_number_{num:06d}.png"
-        ip = PROP.frames_dir / f"frame_number_{num:06d}.jpg"
+        mp = MASK_OUT_DIR / frame_name(num, ".png")
+        ip = PROP.frames_dir / frame_name(num)
         if not (mp.exists() and ip.exists()):
             continue
         img = np.asarray(Image.open(ip).resize((1344, 672))).astype(np.float32)

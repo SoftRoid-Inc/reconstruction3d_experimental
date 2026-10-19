@@ -24,7 +24,7 @@ import numpy as np
 from PIL import Image
 
 from img_align.config import BENCH_DIR, OUT_DIR, PROP, SESSION
-from img_align.eval.gt_traj import MM_PER_PX, load_gt
+from img_align.eval.gt_traj import mm_per_px, load_gt
 
 PAD_PX = 180
 LABEL_COLOR = {"wall": "#1f77b4", "column": "#9467bd",
@@ -44,7 +44,7 @@ def load_track(tag):
 def gt_err(fr, xy, gt):
     e = [math.dist(p, (gt[f]["x_px"], gt[f]["y_px"]))
          for f, p in zip(fr, xy) if f in gt]
-    return float(np.median(e)) * MM_PER_PX / 1000 if len(e) >= 4 else None
+    return float(np.median(e)) * mm_per_px() / 1000 if len(e) >= 4 else None
 
 
 def plan_shapes(floor):

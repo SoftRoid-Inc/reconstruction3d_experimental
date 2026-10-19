@@ -16,7 +16,7 @@ import numpy as np
 
 from img_align.config import BENCH_DIR
 from img_align.core.chaining import RESULTS_DIR
-from img_align.config import FRAMES_DIR, SESSION
+from img_align.config import FRAMES_DIR, SESSION, frame_name
 from img_align.core.plan_grid import PlanGrid
 from img_align.mesh.meshing import ISLANDS, _rot, island_scale, load_anchor, resolve_frames
 from img_align.core.io_ply import read_ply_xyzrgb
@@ -92,7 +92,7 @@ def prep_island(isl):
     n_skip_img = n_skip_masked = 0
     for fi, fr in enumerate(frames):
         num = int(fr["name"].replace("frame_", ""))
-        src = FRAMES_DIR / f"frame_number_{num:06d}.jpg"
+        src = FRAMES_DIR / frame_name(num)
         if not src.exists():
             print(f"  warn: {src.name} なし -> skip")
             n_skip_img += 1

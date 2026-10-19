@@ -20,7 +20,7 @@ import numpy as np
 
 from img_align.config import BENCH_DIR, OUT_DIR
 from img_align.core.plan_grid import PlanGrid
-from img_align.eval.gt_traj import MM_PER_PX, load_gt
+from img_align.eval.gt_traj import mm_per_px, load_gt
 from img_align.postproc.anchor import prepare_island
 from img_align.postproc.anchor_score import AnchorScorer
 from img_align.postproc.plan_icp import (cells_to_px, segs_to_cells,
@@ -81,7 +81,7 @@ def blame(tag, floor, gt, mpu_source="mapany"):
         ref = gt_px if idx is k else np.array(
             [[gt[frames[i]]["x_px"], gt[frames[i]]["y_px"]] for i in idx])
         return float(np.median(np.linalg.norm(px - ref, axis=1))) \
-            * MM_PER_PX / 1000
+            * mm_per_px() / 1000
 
     # 正解: GTへの最適相似変換 (鏡映なし)
     s_t, th_t, t_t = sim2_umeyama(cam_rc[k], gt_cells)

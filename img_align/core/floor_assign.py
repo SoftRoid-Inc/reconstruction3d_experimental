@@ -34,9 +34,19 @@ ASSIGN_NAME = "floor_assign.json"
 
 
 def floor_names():
-    """図面がある階を下から順に"""
-    names = [p.stem for p in PROP.zumen_dir.glob("*.jpg")]
-    return sorted(names, key=lambda s: int("".join(c for c in s if c.isdigit())))
+    """図面がある階を下から順に
+
+    B1F は地下なので負、RF/PH のように数字を持たない階名は末尾に送る
+    (int() 決め打ちだと ValueError で階の列挙ごと落ちていた)。
+    """
+    def key(s):
+        d = "".join(c for c in s if c.isdigit())
+        if not d:
+            return (1, 0, s)        # 数字なし (RF, PH, ...) は最後
+        n = int(d)
+        return (0, -n if s.upper().startswith("B") else n, s)
+
+    return sorted((p.stem for p in PROP.zumen_dir.glob("*.jpg")), key=key)
 
 
 def load(name=ASSIGN_NAME):
