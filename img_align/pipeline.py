@@ -48,13 +48,22 @@ def stage_chunks_chains(args):
     from img_align.core.chunking import run_batch
     from img_align.core.chunking import MODEL_DIRS
     base, prefix = MODEL_DIRS[args.model]
-    chunks_dir = base if not args.stride else f"{base}_s{args.stride}"
+    # stride / chunk-size を変えたら**チャンク置き場もタグも**分ける。
+    # タグを分けないと frontend_bench/<タグ>/ を上書きして既定の結果が消える
+    var = ""
+    if args.stride:
+        var += f"_s{args.stride}"
+    if getattr(args, "chunk_size", None):
+        var += f"_c{args.chunk_size}"
+    chunks_dir = base + var
     # 後段(resplit/remerge)も同じマニフェストを読み書きするのでここで確定させる
     args.manifest_out = args.manifest_out or f"{prefix}_manifest.json"
     manifest = run_batch(max_seg=args.max_seg, chunks_dir=chunks_dir,
                          segments_source=args.segments, stride=args.stride,
                          manifest_out=args.manifest_out,
-                         use_idle=not args.no_idle, model=args.model)
+                         use_idle=not args.no_idle, model=args.model,
+                         chunk_size=getattr(args, "chunk_size", None),
+                         tag_suffix=var)
     if "yaw_fix" in args.post:
         from img_align.config import RESULTS_DIR
         from img_align.postproc.yaw_fix import fix_chunk
@@ -217,8 +226,10 @@ def post_bridge(args):
     するのが狙い (律速は候補生成なので、指紋が増えるほど当たりやすい)。
     """
     from img_align.core.island_group import MODES, build_groups, group_manifest
+    from img_align.core.island_group import CONSENSUS_OK_M
     groups = build_groups(list(args.bridge_modes or MODES),
-                          args.bridge_thresh, args.skip_cross_floor)
+                          args.bridge_thresh or CONSENSUS_OK_M,
+                          args.skip_cross_floor)
     print(f"[bridge] {len(groups)}群れ " +
           " / ".join(f"{len(g)}島" for g, _ in groups))
     man = group_manifest(groups)
@@ -295,6 +306,15 @@ def main():
                     help="既定は <model>_manifest.json")
     sp.add_argument("--no-idle", action="store_true",
                     help="静止区間での島切断を無効化 (対照実験用)")
+    sp.add_argument("--chunk-size", type=int, default=None,
+                    help="1チャンクのフレーム数 (既定16)。大きくすると接続数が"
+                         "減り、累積スケール誤差が効きにくくなる")
+    sp.add_argument("--bridge-modes", nargs="*", default=None,
+                    help="橋の方式 (既定 n8s1 n8s2 n8s4)。先頭が採用する変換")
+    sp.add_argument("--bridge-thresh", type=float, default=None,
+                    help="方式間の一致度[m]がこれ未満の切れ目だけ繋ぐ")
+    sp.add_argument("--skip-cross-floor", action="store_true",
+                    help="階をまたぐ切れ目は橋を試さない (推論を約37%% 節約)")
     sp.add_argument("--jobs", type=int, default=None,
                     help="アンカーの並列数 (既定 CPU数/4。島ごとに独立)")
     sp.add_argument("--no-eval", action="store_true")

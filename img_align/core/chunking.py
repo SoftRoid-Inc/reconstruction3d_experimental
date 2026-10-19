@@ -18,14 +18,22 @@ CHUNK_SIZE = 16
 CHUNK_STRIDE = 12          # 重なり = CHUNK_SIZE - CHUNK_STRIDE = 4フレーム
 
 
-def chunk_windows(n, stride=None):
+def chunk_windows(n, stride=None, size=None):
     """チャンク窓列。strideを小さくすると重なりが増える
-    (既定12=重なり4フレーム。8なら重なり8フレームで接続が安定する)"""
+
+    **重なりを増やしても島の精度は上がらない** (2026-10-16実測、外部データ
+    10島): stride 12→10 で接続1本あたりの |log s| は 0.195→0.154 (−21%) と
+    改善するが、チャンクが27%増えるので掛け合わせる回数も増え、島の形状残差は
+    0.0060→0.0071 (+19%) と**悪化**した。スケール誤差は乗算で累積するので、
+    1本あたりを良くしても本数が増えれば相殺される。
+    → 効くとすれば **size を大きくして本数を減らす**方向。
+    """
+    size = size or CHUNK_SIZE
     stride = stride or CHUNK_STRIDE
-    starts = list(range(0, max(n - CHUNK_SIZE, 0) + 1, stride))
-    if starts and starts[-1] + CHUNK_SIZE < n:
-        starts.append(n - CHUNK_SIZE)
-    return [(s, min(s + CHUNK_SIZE, n)) for s in starts] or [(0, n)]
+    starts = list(range(0, max(n - size, 0) + 1, stride))
+    if starts and starts[-1] + size < n:
+        starts.append(n - size)
+    return [(s, min(s + size, n)) for s in starts] or [(0, n)]
 
 
 MIN_SEG_FRAMES = 24   # これ未満の訪問区間は島にしない (チャンク2本に満たない)
@@ -141,7 +149,8 @@ def imu_segments(n_frames, use_idle=True):
     return segs
 
 
-def build_manifest(windows, max_seg=None, segments=None, prefix="pv"):
+def build_manifest(windows, max_seg=None, segments=None, prefix="pv",
+                   tag_suffix=""):
     """max_seg指定時: それより長い訪問区間を等分割する (長島ドリフト対策。
     タグは pv0925_1Fa1, 1Fa2… のように数字接尾辞)。
     segments: [(floor|None, a, b)] を外部注入可 (imu_segments等)。
@@ -179,13 +188,15 @@ def build_manifest(windows, max_seg=None, segments=None, prefix="pv"):
                                        for ca_, cb_ in cuts)]
                     if not use:
                         continue    # 切断域を避けられない小区間は破棄
-                ent = {"tag": f"{prefix}{SESSION}_{fl_name}{sfx}{dsfx}",
+                ent = {"tag": f"{prefix}{SESSION}_{fl_name}{sfx}{dsfx}"
+                              f"{tag_suffix}",
                        "floor": fl, "a": a2, "b": b2, "chunks": use}
                 if parts > 1:
                     # 分割サブ島は親を明示する。タグ末尾の数字で判定すると
                     # IMU区間のタグ (pv<sess>_sNN) を誤ってサブ島扱いしてしまう
                     # (2026-10-14: 本番で6島中5島がskipされていた)
-                    ent["parent"] = f"{prefix}{SESSION}_{fl_name}{sfx}"
+                    ent["parent"] = (f"{prefix}{SESSION}_{fl_name}{sfx}"
+                                     f"{tag_suffix}")
                 manifest.append(ent)
     return manifest
 
@@ -227,22 +238,26 @@ def infer_chunks(model, windows, needed, chunks_dir, entries):
 
 def run_batch(max_seg=None, manifest_out=None,
               chunks_dir=None, segments_source="gt", stride=None,
-              use_idle=True, model="pv"):
+              use_idle=True, model="pv", chunk_size=None, tag_suffix=""):
     """前段一括: 区間計画 → チャンク推論(既存スキップ) → 区間別チェーン
 
     segments_source: "gt"=gt_trajectory.csv(開発・評価用) / "imu"=stairnet検出
     (GTフリー、本番用。階ラベルなし→アンカー段で決定)
     model: "pv"=PanoVGGT(既定) / "pi3" / "holo"=Pi3-Finetuned-Holo360D。
-    チャンク置き場・タグ接頭辞・マニフェストをモデル別に分けるので共存できる"""
+    チャンク置き場・タグ接頭辞・マニフェストをモデル別に分けるので共存できる。
+
+    **tag_suffix は stride/chunk_size を変えるとき必須**。チャンク置き場と
+    マニフェストを分けてもタグが同名だと `frontend_bench/<タグ>/` を上書きして
+    しまう (2026-10-16に重なり6枚の検証で重なり4枚のチェーンを消した)。"""
     dflt_dir, prefix = MODEL_DIRS[model]
     chunks_dir = chunks_dir or dflt_dir
     manifest_out = manifest_out or f"{prefix}_manifest.json"
     n = len(sorted(FRAMES_DIR.glob("frame_number_*.jpg")))
     entries = select_entries(f"0:{n}:1")
-    windows = chunk_windows(n, stride)
+    windows = chunk_windows(n, stride, chunk_size)
     segs = imu_segments(n, use_idle) if segments_source == "imu" else None
     manifest = build_manifest(windows, max_seg=max_seg, segments=segs,
-                              prefix=prefix)
+                              prefix=prefix, tag_suffix=tag_suffix)
     for m in manifest:
         print(f"{m['tag']}: frames {m['a']}-{m['b']} chunks {m['chunks'][0]}"
               f"..{m['chunks'][-1]}")
