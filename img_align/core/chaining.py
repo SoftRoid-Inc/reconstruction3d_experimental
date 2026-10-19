@@ -186,6 +186,13 @@ def chain(cdirs, yaw_lock=False):
     return chunks, T, log
 
 
+# **警告**: `panovggt_out/pointclouds/per_frame/` は削除してはいけない。
+# chain() のチャンク間ICPはこのフレーム別点群を使う (共有カメラ4点の
+# Umeyamaだけでは共線で弱いため)。消すとチャンクが使用不能になり、
+# 既存のチェーンは残るが**再生成できなくなる** (2026-10-16に外部データで
+# 実際に踏み、再推論し直した)。`posegraph` も同じものを使う。
+
+
 def load_chunk(cdir):
     """チャンクの (names, cam_positions, poses, per-frame点群dict, 不信集合) を読む
 

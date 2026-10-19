@@ -267,6 +267,10 @@ def main():
     ap.add_argument("--from-tag", default=None,
                     help="pv_manifest.json の島タグからチャンク列を取る")
     ap.add_argument("--chunks-dir", default="chunks")
+    ap.add_argument("--manifest", default="pv_manifest.json",
+                    help="--from-tag が読むマニフェスト。--chunks-dir と"
+                         "必ず対で指定する (チャンク番号→フレームの対応が"
+                         "stride/chunk-size で変わるため)")
     ap.add_argument("--yaw-w", type=float, default=YAW_W)
     ap.add_argument("--no-loops", action="store_true",
                     help="ループ閉合なし (逐次のみ=従来相当の対照実験)")
@@ -274,7 +278,7 @@ def main():
     pcd = RESULTS_DIR / "pcd" / args.chunks_dir
     ks = args.chunks
     if args.from_tag:
-        man = json.loads((BENCH_DIR / "pv_manifest.json").read_text())
+        man = json.loads((BENCH_DIR / args.manifest).read_text())
         ks = next(m["chunks"] for m in man if m["tag"] == args.from_tag)
     cdirs = [pcd / f"chunk_{k:02d}" for k in ks]
     tag = args.tag or (f"pg_{args.from_tag}" if args.from_tag else "pg_test")
