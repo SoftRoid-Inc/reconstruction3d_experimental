@@ -19,7 +19,6 @@ import argparse
 import numpy as np
 from PIL import Image
 
-from recon3d.config import OUT_DIR, PROP, SESSION
 from recon3d.core.bridge import (bridge_transform, consensus, islands_at,
                                    junctions, manifest_islands, transported)
 from recon3d.core.island_group import CONSENSUS_OK_M, build_groups
@@ -31,9 +30,9 @@ COLORS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#17becf",
           "#8c564b", "#e377c2")
 
 
-def _chain_xy(tag, horiz=(0, 2)):
+def _chain_xy(paths, tag, horiz=(0, 2)):
     from recon3d.core.bridge import _chain_poses
-    c = _chain_poses(tag)
+    c = _chain_poses(paths, tag)
     fr = sorted(c)
     return fr, np.stack([[c[f][horiz[0]], c[f][horiz[1]]] for f in fr])
 
@@ -43,20 +42,20 @@ def _gt_xy(gt, frames):
     return ok, np.array([[gt[f]["x_px"], gt[f]["y_px"]] for f in ok])
 
 
-def draw(a_end, b_start, mode, gt, horiz=(0, 2)):
+def draw(paths, a_end, b_start, mode, gt, horiz=(0, 2)):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     matplotlib.rcParams["font.family"] = ["Noto Sans CJK JP", "DejaVu Sans"]
 
-    ma, mb = islands_at(a_end, b_start)
+    ma, mb = islands_at(paths, a_end, b_start)
     if ma is None:
         return None
-    tb_pos, _ = transported(a_end, b_start, mode)
+    tb_pos, _ = transported(paths, a_end, b_start, mode)
     if tb_pos is None:
         return None
-    fa, xa = _chain_xy(ma["tag"], horiz)
-    fb, _ = _chain_xy(mb["tag"], horiz)
+    fa, xa = _chain_xy(paths, ma["tag"], horiz)
+    fb, _ = _chain_xy(paths, mb["tag"], horiz)
     xb = np.stack([tb_pos[:, horiz[0]], tb_pos[:, horiz[1]]], axis=1)
 
     # 島Aだけを使って図面への変換を決める (掌性もここで確定)
@@ -70,11 +69,11 @@ def draw(a_end, b_start, mode, gt, horiz=(0, 2)):
     gb, yb = _gt_xy(gt, fb)
     ib = [i for i, f in enumerate(fb) if f in gt]
     err = (float(np.median(np.linalg.norm(pb[ib] - yb, axis=1)))
-           * mm_per_px() / 1000 if len(gb) >= 4 else None)
-    m = mm_per_px() / 1000
+           * mm_per_px(paths) / 1000 if len(gb) >= 4 else None)
+    m = mm_per_px(paths) / 1000
 
     floor = ma.get("floor") or mb.get("floor")
-    bg = np.asarray(Image.open(PROP.zumen_dir / f"{floor}.jpg").convert("L"))
+    bg = np.asarray(Image.open(paths.floors / f"{floor}.jpg").convert("L"))
     fig, ax = plt.subplots(figsize=(13, 9))
     ax.imshow(bg, cmap="gray", vmin=0, vmax=255, alpha=0.35, zorder=0)
     ax.plot(ya[:, 0], ya[:, 1], "-", color="k", lw=5, alpha=0.20,
@@ -96,17 +95,17 @@ def draw(a_end, b_start, mode, gt, horiz=(0, 2)):
                 max(0, allxy[:, 1].min() - PAD_PX))
     ax.set_axis_off()
     ax.legend(fontsize=9, loc="upper right", framealpha=0.85)
-    ax.set_title(f"{SESSION} {floor} 切れ目 {a_end}->{b_start} ({mode}) — "
+    ax.set_title(f"{paths.name} {floor} 切れ目 {a_end}->{b_start} ({mode}) — "
                  f"島Aを図面に合わせ、同じ変換で島Bを描く"
                  + (f"   島Bのずれ {err:.2f}m" if err else ""), fontsize=11)
-    out = OUT_DIR / f"bridge_{a_end}_{b_start}_{mode}.png"
+    out = paths.backend / f"bridge_{a_end}_{b_start}_{mode}.png"
     fig.savefig(out, dpi=140, bbox_inches="tight")
     plt.close(fig)
     return out, err
 
 
 
-def draw_floors(gt, modes, thresh=CONSENSUS_OK_M, horiz=(0, 2)):
+def draw_floors(paths, gt, modes, thresh=CONSENSUS_OK_M, horiz=(0, 2)):
     """フロアごとに全島を描く。橋で繋がった島は**同じ変換**で置く"""
     import matplotlib
     matplotlib.use("Agg")
@@ -115,19 +114,19 @@ def draw_floors(gt, modes, thresh=CONSENSUS_OK_M, horiz=(0, 2)):
     from recon3d.core.geometry import apply as apply3
     matplotlib.rcParams["font.family"] = ["Noto Sans CJK JP", "DejaVu Sans"]
 
-    groups = build_groups(modes, thresh)
+    groups = build_groups(paths, modes, thresh)
     # (floor, 群れindex) ごとに、その階の島のフレームと根ゲージ位置を集める
     per = {}
     for gi, (isl, T) in enumerate(groups):
         for m in isl:
-            c = _chain_poses(m["tag"])
+            c = _chain_poses(paths, m["tag"])
             fr = sorted(c)
             pos = apply3(T[m["tag"]], np.stack([c[f] for f in fr]))
             per.setdefault(m["floor"], []).append((gi, m["tag"], fr, pos))
 
     outs = []
     for floor, items in sorted(per.items()):
-        bg = np.asarray(Image.open(PROP.zumen_dir / f"{floor}.jpg")
+        bg = np.asarray(Image.open(paths.floors / f"{floor}.jpg")
                         .convert("L"))
         fig, ax = plt.subplots(figsize=(13, 9))
         ax.imshow(bg, cmap="gray", vmin=0, vmax=255, alpha=0.35, zorder=0)
@@ -157,7 +156,7 @@ def draw_floors(gt, modes, thresh=CONSENSUS_OK_M, horiz=(0, 2)):
                     color=COLORS[gi % len(COLORS)], zorder=4,
                     label=f"群れ{gi} ({n_isl}島: "
                           f"{'+'.join(it[1].split('_')[-1] for it in sub)}) "
-                          f"{r * mm_per_px() / 1000:.2f}m")
+                          f"{r * mm_per_px(paths) / 1000:.2f}m")
         A = np.vstack(allxy)
         ax.set_xlim(max(0, A[:, 0].min() - PAD_PX),
                     min(bg.shape[1], A[:, 0].max() + PAD_PX))
@@ -165,9 +164,9 @@ def draw_floors(gt, modes, thresh=CONSENSUS_OK_M, horiz=(0, 2)):
                     max(0, A[:, 1].min() - PAD_PX))
         ax.set_axis_off()
         ax.legend(fontsize=9, loc="upper right", framealpha=0.85)
-        ax.set_title(f"{SESSION} {floor} — 橋で繋がった島は同じ変換で配置 "
+        ax.set_title(f"{paths.name} {floor} — 橋で繋がった島は同じ変換で配置 "
                      f"(一致度 {thresh}m 未満を接続)", fontsize=11)
-        out = OUT_DIR / f"bridge_floor_{floor}.png"
+        out = paths.backend / f"bridge_floor_{floor}.png"
         fig.savefig(out, dpi=140, bbox_inches="tight")
         plt.close(fig)
         outs.append(out)
@@ -179,24 +178,24 @@ COLORS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#17becf",
           "#e377c2", "#8c564b")
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--modes", nargs="*", default=["n8s1"])
     ap.add_argument("--junction", help="a_end:b_start (省略時は全切れ目)")
     ap.add_argument("--floors", action="store_true",
                     help="フロアごとに全島を描く (橋で繋がった島は同じ変換)")
     ap.add_argument("--thresh", type=float, default=CONSENSUS_OK_M)
-    args = ap.parse_args()
-    gt = load_gt()
+    args = ap.parse_args(argv)
+    gt = load_gt(paths)
     if args.floors:
-        draw_floors(gt, args.modes, args.thresh)
+        draw_floors(paths, gt, args.modes, args.thresh)
         return
     js = ([tuple(int(v) for v in args.junction.split(":"))] if args.junction
-          else junctions())
+          else junctions(paths))
     for a, b in js:
         for mode in args.modes:
             try:
-                r = draw(a, b, mode, gt)
+                r = draw(paths, a, b, mode, gt)
             except Exception as e:
                 print(f"{a}->{b} {mode}: 失敗 ({type(e).__name__}: {e})")
                 continue
@@ -206,6 +205,3 @@ def main():
             out, err = r
             print(f"-> {out}" + (f"  島Bのずれ {err:.2f}m" if err else ""))
 
-
-if __name__ == "__main__":
-    main()

@@ -25,7 +25,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.spatial import cKDTree
 
-from recon3d.config import BENCH_DIR
 from recon3d.core.geometry import rotation_to_y
 from recon3d.eval.frontend import fit2d
 from recon3d.eval.gt_traj import mm_per_px, load_gt
@@ -36,14 +35,14 @@ BAND_HALF_M = 0.5       # 壁帯スライス: カメラ中央高さ ±0.5m
 DIST_CAP_M = 1.0        # 壁面距離の打ち切り (外れ点対策)
 
 
-def load_traj(tag):
-    d = np.load(BENCH_DIR / tag / "global_cameras.npz")
+def load_traj(paths, tag):
+    d = np.load(paths.bench / tag / "global_cameras.npz")
     names = [str(n) for n in d["names"]]
     frames = np.array([int(n.replace("frame_", "")) for n in names])
     return names, frames, d["positions"], d["poses"]
 
 
-def fit_to_gt(frames, positions, poses, gt):
+def fit_to_gt(paths, frames, positions, poses, gt):
     """重力整列+鏡映2択の2D相似フィット。返り値:
     (A: 3x3線形(回転+鏡映, 正規直交), s: スケール, t2: XZ並進, ate_median)
     図面メートル座標 = s * A@p の[XZ] + t2、高さ = (s*A@p)[Y]"""
@@ -55,8 +54,8 @@ def fit_to_gt(frames, positions, poses, gt):
     for i, f in enumerate(frames):
         g = min(gt, key=lambda k: abs(k - f))
         if abs(g - f) <= 3:
-            gt_xy.append([gt[g]["x_px"] * mm_per_px() / 1000,
-                          gt[g]["y_px"] * mm_per_px() / 1000])
+            gt_xy.append([gt[g]["x_px"] * mm_per_px(paths) / 1000,
+                          gt[g]["y_px"] * mm_per_px(paths) / 1000])
             used.append(i)
     gt_xy = np.array(gt_xy)
     best = None
@@ -87,11 +86,11 @@ def to_drawing(pts, A, s, t2):
     return np.stack([q[:, 0] + t2[0], q[:, 2] + t2[1], q[:, 1]], axis=1)
 
 
-def wall_metrics(draw_pts, cam_h, segs_px, label):
+def wall_metrics(paths, draw_pts, cam_h, segs_px, label):
     """カメラ高さ帯の点の壁面距離統計"""
     band = (draw_pts[:, 2] > cam_h - BAND_HALF_M) & \
            (draw_pts[:, 2] < cam_h + BAND_HALF_M)
-    pts = draw_pts[band][:, :2] * 1000 / mm_per_px()          # px
+    pts = draw_pts[band][:, :2] * 1000 / mm_per_px(paths)          # px
     # 面ラインを2px間隔でサンプルしてKDTree
     samples = []
     for x1, y1, x2, y2 in segs_px:
@@ -100,7 +99,7 @@ def wall_metrics(draw_pts, cam_h, segs_px, label):
                                  np.linspace(y1, y2, n)], axis=1))
     tree = cKDTree(np.concatenate(samples))
     d_px, _ = tree.query(pts, k=1)
-    d_m = np.minimum(d_px * mm_per_px() / 1000, DIST_CAP_M)
+    d_m = np.minimum(d_px * mm_per_px(paths) / 1000, DIST_CAP_M)
     return {
         "source": label,
         "n_band_pts": int(len(pts)),
@@ -124,37 +123,37 @@ def overlay_png(path, pts_px, segs_px, title):
     plt.close(fig)
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--floor", required=True)
     ap.add_argument("--tags", nargs="*", default=[])
     ap.add_argument("--local", nargs="*", default=[],
                     help="'点群タグ:ポーズタグ' の列 (local_points.npzを配置)")
     ap.add_argument("--label", default="")
-    args = ap.parse_args()
-    gt = {f: v for f, v in load_gt().items() if v["floor"] == args.floor}
-    segs = wall_face_segments_px(args.floor)
+    args = ap.parse_args(argv)
+    gt = {f: v for f, v in load_gt(paths).items() if v["floor"] == args.floor}
+    segs = wall_face_segments_px(paths, args.floor)
     results = []
 
     for tag in args.tags:
-        names, frames, pos, poses = load_traj(tag)
-        A, s, t2, ate, mirror = fit_to_gt(frames, pos, poses, gt)
-        xyz, _ = read_ply_xyzrgb(BENCH_DIR / tag / "global_points.ply")
+        names, frames, pos, poses = load_traj(paths, tag)
+        A, s, t2, ate, mirror = fit_to_gt(paths, frames, pos, poses, gt)
+        xyz, _ = read_ply_xyzrgb(paths.bench / tag / "global_points.ply")
         draw = to_drawing(xyz, A, s, t2)
         cam_h = float(np.median(to_drawing(pos, A, s, t2)[:, 2]))
-        r, pts_px = wall_metrics(draw, cam_h, segs, tag)
+        r, pts_px = wall_metrics(paths, draw, cam_h, segs, tag)
         r.update(traj_ate_m=round(ate, 3), mirror=mirror, fit_scale=round(s, 4))
         results.append(r)
-        overlay_png(BENCH_DIR / f"depth_eval_{tag}.png", pts_px, segs,
+        overlay_png(paths.bench / f"depth_eval_{tag}.png", pts_px, segs,
                     f"{tag}: wall med {r['wall_med_m']}m "
                     f"/ ≤10cm {r['within10cm']:.0%}")
         print(json.dumps(r, ensure_ascii=False))
 
     for spec in args.local:
         ptag, posetag = spec.split(":")
-        names, frames, pos, poses = load_traj(posetag)
-        A, s, t2, ate, mirror = fit_to_gt(frames, pos, poses, gt)
-        d = np.load(BENCH_DIR / ptag / "local_points.npz")
+        names, frames, pos, poses = load_traj(paths, posetag)
+        A, s, t2, ate, mirror = fit_to_gt(paths, frames, pos, poses, gt)
+        d = np.load(paths.bench / ptag / "local_points.npz")
         name_to_i = {n: i for i, n in enumerate(names)}
         placed = []
         for key in d.files:
@@ -170,19 +169,16 @@ def main():
         draw = np.concatenate(placed)
         cam_h = float(np.median(to_drawing(pos, A, s, t2)[:, 2]))
         label = f"{ptag}@{posetag}"
-        r, pts_px = wall_metrics(draw, cam_h, segs, label)
+        r, pts_px = wall_metrics(paths, draw, cam_h, segs, label)
         r.update(traj_ate_m=round(ate, 3), mirror=mirror, fit_scale=round(s, 4),
                  n_frames_placed=len(placed))
         results.append(r)
-        overlay_png(BENCH_DIR / f"depth_eval_{ptag}_at_{posetag}.png", pts_px,
+        overlay_png(paths.bench / f"depth_eval_{ptag}_at_{posetag}.png", pts_px,
                     segs, f"{label}: wall med {r['wall_med_m']}m "
                     f"/ ≤10cm {r['within10cm']:.0%}")
         print(json.dumps(r, ensure_ascii=False))
 
-    out = BENCH_DIR / f"depth_eval{('_' + args.label) if args.label else ''}.json"
+    out = paths.bench / f"depth_eval{('_' + args.label) if args.label else ''}.json"
     out.write_text(json.dumps(results, indent=1, ensure_ascii=False))
     print(f"-> {out}")
 
-
-if __name__ == "__main__":
-    main()

@@ -28,12 +28,11 @@
 import argparse
 import json
 
-from recon3d.config import BENCH_DIR, OUT_DIR, PROP
 
 ASSIGN_NAME = "floor_assign.json"
 
 
-def floor_names():
+def floor_names(paths):
     """図面がある階を下から順に
 
     B1F は地下なので負、RF/PH のように数字を持たない階名は末尾に送る
@@ -46,12 +45,12 @@ def floor_names():
         n = int(d)
         return (0, -n if s.upper().startswith("B") else n, s)
 
-    return sorted((p.stem for p in PROP.zumen_dir.glob("*.jpg")), key=key)
+    return sorted((p.stem for p in paths.floors.glob("*.jpg")), key=key)
 
 
-def load(name=ASSIGN_NAME):
+def load(paths, name=ASSIGN_NAME):
     """割当ファイルを読む。無ければ None"""
-    p = OUT_DIR / name
+    p = paths.backend / name
     return json.loads(p.read_text()) if p.exists() else None
 
 
@@ -70,9 +69,9 @@ def floor_of(info, assign):
     return best
 
 
-def apply(manifest, name=ASSIGN_NAME, quiet=False):
+def apply(paths, manifest, name=ASSIGN_NAME, quiet=False):
     """マニフェストに階を流し込む (割当が無ければ素通し)"""
-    assign = load(name)
+    assign = load(paths, name)
     if not assign:
         return manifest
     for m in manifest:
@@ -86,10 +85,9 @@ def apply(manifest, name=ASSIGN_NAME, quiet=False):
     return manifest
 
 
-def template(manifest, name=ASSIGN_NAME):
+def template(paths, manifest, name=ASSIGN_NAME):
     """現在の島を並べた雛形を書く (floor_seq があれば初期値に使う)"""
-    from recon3d.config import IMU_DIR
-    seq = IMU_DIR / "floor_seq.json"
+    seq = paths.imu / "floor_seq.json"
     hint = {}
     if seq.exists():
         for s in json.loads(seq.read_text())["segments"]:
@@ -97,12 +95,12 @@ def template(manifest, name=ASSIGN_NAME):
                 n = min(m["b"], s["b"]) - max(m["a"], s["a"]) + 1
                 if n > hint.get(m["tag"], (None, 0))[1]:
                     hint[m["tag"]] = (s["floor"], n)
-    out = {"_floors": floor_names(),
+    out = {"_floors": floor_names(paths),
            "_note": "islands を編集するか、ranges に [開始, 終了, 階名] を並べる",
            "islands": {m["tag"]: hint.get(m["tag"], (None,))[0]
                        for m in manifest},
            "ranges": []}
-    p = OUT_DIR / name
+    p = paths.backend / name
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(out, indent=1, ensure_ascii=False))
     print(f"-> {p}")
@@ -112,13 +110,13 @@ def template(manifest, name=ASSIGN_NAME):
     return out
 
 
-def check(manifest, name=ASSIGN_NAME):
+def check(paths, manifest, name=ASSIGN_NAME):
     """割当の妥当性を確認する"""
-    assign = load(name)
+    assign = load(paths, name)
     if not assign:
-        print(f"[floor_assign] {OUT_DIR / name} がありません (--template で作成)")
+        print(f"[floor_assign] {paths.backend / name} がありません (--template で作成)")
         return False
-    names = floor_names()
+    names = floor_names(paths)
     ok = True
     for m in manifest:
         fl = floor_of(m, assign)
@@ -133,7 +131,7 @@ def check(manifest, name=ASSIGN_NAME):
     return ok
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default="pv_manifest.json")
     ap.add_argument("--name", default=ASSIGN_NAME)
@@ -141,12 +139,9 @@ def main():
     g.add_argument("--template", action="store_true", help="雛形を出力")
     g.add_argument("--check", action="store_true", help="割当を確認")
     args = ap.parse_args()
-    manifest = json.loads((BENCH_DIR / args.manifest).read_text())
+    manifest = json.loads((paths.bench / args.manifest).read_text())
     if args.template:
-        template(manifest, args.name)
+        template(paths, manifest, args.name)
     else:
-        raise SystemExit(0 if check(manifest, args.name) else 1)
+        raise SystemExit(0 if check(paths, manifest, args.name) else 1)
 
-
-if __name__ == "__main__":
-    main()

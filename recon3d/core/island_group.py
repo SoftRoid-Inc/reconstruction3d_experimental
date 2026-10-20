@@ -28,7 +28,6 @@ import json
 
 import numpy as np
 
-from recon3d.config import BENCH_DIR
 from recon3d.core.bridge import (bridge_transform, consensus, junction_kind,
                                    manifest_islands)
 from recon3d.core.geometry import apply, compose
@@ -49,7 +48,8 @@ def _eye():
     return (1.0, np.eye(3), np.zeros(3))
 
 
-def build_groups(modes=MODES, thresh=CONSENSUS_OK_M, skip_cross_floor=False,
+def build_groups(paths, modes=MODES, thresh=CONSENSUS_OK_M,
+                 skip_cross_floor=False,
                  verbose=True, manifest_name=None):
     """島を群れにまとめる。[(島リスト, {tag: 群れ先頭ゲージへの変換})]
 
@@ -59,18 +59,18 @@ def build_groups(modes=MODES, thresh=CONSENSUS_OK_M, skip_cross_floor=False,
     いう食い違いが起きる)。
     """
     from recon3d.core.bridge import set_manifest_name
-    man = manifest_islands(set_manifest_name(manifest_name))
+    man = manifest_islands(paths, set_manifest_name(manifest_name))
     if not man:
         return []
     groups, cur, T = [], [man[0]], {man[0]["tag"]: _eye()}
     for A, B in zip(man, man[1:]):
         cross = A["floor"] != B["floor"]
-        kind = junction_kind(A["b"], B["a"])
+        kind = junction_kind(paths, A["b"], B["a"])
         if skip_cross_floor and cross:
             c, Tba, why = None, None, "階またぎはskip指定"
         else:
-            c = consensus(A["b"], B["a"], modes)
-            Tba, _ = bridge_transform(A["b"], B["a"], modes[0])
+            c = consensus(paths, A["b"], B["a"], modes)
+            Tba, _ = bridge_transform(paths, A["b"], B["a"], modes[0])
             why = (f"一致度 {c:.2f}m" if c is not None else "一致度 測定不能")
         ok = c is not None and c < thresh and Tba is not None
         if verbose:
@@ -95,12 +95,12 @@ def group_tag(islands):
     return f"{GROUP_PREFIX}{sess}_{islands[0]['a']}_{islands[-1]['b']}"
 
 
-def write_group(islands, T, with_points=True):
+def write_group(paths, islands, T, with_points=True):
     """群れの結合チェーンを frontend_bench/<群れタグ>/ に島と同形式で書く"""
     tag = group_tag(islands)
     if len(islands) == 1:
-        return tag, BENCH_DIR / tag      # 単独島は既存の出力をそのまま使う
-    out = BENCH_DIR / tag
+        return tag, paths.bench / tag      # 単独島は既存の出力をそのまま使う
+    out = paths.bench / tag
     out.mkdir(parents=True, exist_ok=True)
     # 階で割ると先頭が変わるので、**この群れの先頭島**を基準に取り直す
     from recon3d.core.geometry import compose as _c
@@ -109,7 +109,7 @@ def write_group(islands, T, with_points=True):
     T = {m["tag"]: _c(inv0, T[m["tag"]]) for m in islands}
     names, positions, poses, pts, rgbs = [], [], [], [], []
     for m in islands:
-        src = BENCH_DIR / m["tag"]
+        src = paths.bench / m["tag"]
         cam = np.load(src / "global_cameras.npz")
         s, R, t = T[m["tag"]]
         names.extend(str(n) for n in cam["names"])
@@ -166,18 +166,18 @@ def split_by_floor(groups):
     return out
 
 
-def group_manifest(groups, with_points=True):
+def group_manifest(paths, groups, with_points=True):
     """群れを階で割って書き出し、アンカーが食えるマニフェスト形式で返す"""
     out = []
     for islands, T in split_by_floor(groups):
-        tag, _ = write_group(islands, T, with_points)
+        tag, _ = write_group(paths, islands, T, with_points)
         out.append({"tag": tag, "floor": islands[0]["floor"],
                     "a": islands[0]["a"], "b": islands[-1]["b"],
                     "members": [m["tag"] for m in islands]})
     return out
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--modes", nargs="*", default=list(MODES))
     ap.add_argument("--thresh", type=float, default=CONSENSUS_OK_M)
@@ -185,17 +185,15 @@ def main():
                     help="階をまたぐ切れ目は橋を試さない (推論を約37%%節約)")
     ap.add_argument("--dry-run", action="store_true", help="判定だけして書かない")
     ap.add_argument("--no-points", action="store_true", help="点群を書かない")
-    args = ap.parse_args()
-    groups = build_groups(args.modes, args.thresh, args.skip_cross_floor)
+    args = ap.parse_args(argv)
+    groups = build_groups(paths, args.modes, args.thresh,
+                          args.skip_cross_floor)
     print(f"\n{len(groups)}群れ " +
           " / ".join(f"{len(g)}島" for g, _ in groups))
     if args.dry_run:
         return
-    man = group_manifest(groups, with_points=not args.no_points)
-    p = BENCH_DIR / "pv_group_manifest.json"
+    man = group_manifest(paths, groups, with_points=not args.no_points)
+    p = paths.bench / "pv_group_manifest.json"
     p.write_text(json.dumps(man, ensure_ascii=False, indent=1))
     print(f"-> {p}")
 
-
-if __name__ == "__main__":
-    main()

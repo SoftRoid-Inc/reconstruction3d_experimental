@@ -21,7 +21,6 @@ import math
 
 import numpy as np
 
-from recon3d.config import BENCH_DIR, PROP, RESULTS_DIR
 from recon3d.core.io_ply import write_ply
 
 CROP_TAG = "mapany_f130"
@@ -47,19 +46,19 @@ def crop2rig(yaw_deg=YAW_DEG, pitch_deg=PITCH_DEG):
     return ry @ rx
 
 
-def select_frames(floor=None, stride=1, frange=None):
+def select_frames(paths, floor=None, stride=1, frange=None):
     """対象フレーム番号列。--floor指定時はGTの階割当で絞る (階段区間を除外)。
     frange=(a,b) でフレーム範囲も絞る (同一階の複数訪問区間の分離用)
 
     GTの出どころは物件で違う (28-BBBBB=手動登録CSV / 28-AAAAA=メタCSV) ので
     直接CSVを開かず load_gt に任せる。"""
     name_map = json.loads(
-        (RESULTS_DIR / "vidmap" / f"name_map_{CROP_TAG}.json").read_text())
+        (paths.results / "vidmap" / f"name_map_{CROP_TAG}.json").read_text())
     fr2file = {fr: name for name, fr in name_map.items()}
     frames = sorted(fr2file)
     if floor:
         from recon3d.eval.gt_traj import load_gt
-        keep = {f for f, v in load_gt().items() if v["floor"] == floor}
+        keep = {f for f, v in load_gt(paths).items() if v["floor"] == floor}
         frames = [fr for fr in frames if fr in keep]
     if frange:
         frames = [fr for fr in frames if frange[0] <= fr <= frange[1]]
@@ -68,8 +67,8 @@ def select_frames(floor=None, stride=1, frange=None):
 
 
 
-def save_bench(tag, names, positions, poses, pts, rgb, log):
-    out = BENCH_DIR / tag
+def save_bench(paths, tag, names, positions, poses, pts, rgb, log):
+    out = paths.bench / tag
     out.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(out / "global_cameras.npz",
                         names=np.array(names), positions=positions, poses=poses)
@@ -80,15 +79,15 @@ def save_bench(tag, names, positions, poses, pts, rgb, log):
           + (f", {len(pts):,} pts" if pts is not None else "") + ")")
 
 
-def run_infer(args):
+def run_infer(paths, args):
     import torch
     from PIL import Image
     from mapanything.models import MapAnything
     from mapanything.utils.image import preprocess_inputs
 
-    frames, fr2file = select_frames(args.floor, args.stride, _frange(args))
+    frames, fr2file = select_frames(paths, args.floor, args.stride, _frange(args))
     yaws = [float(y) for y in args.yaws.split(",")]
-    crop_dirs = {y: RESULTS_DIR / "vidmap"
+    crop_dirs = {y: paths.results / "vidmap"
                  / (CROP_TAG if y == 0 else f"{CROP_TAG}_y{int(y)}")
                  for y in yaws}
     print(f"{len(frames)} frames x {len(yaws)} yaws "
@@ -97,7 +96,7 @@ def run_infer(args):
     # 案1: ポーズ条件付け (既存frontend_benchタグのリグ姿勢をクロップ姿勢に直して入力)
     cond_pose = {}
     if args.pose_cond:
-        d = np.load(BENCH_DIR / args.pose_cond / "global_cameras.npz")
+        d = np.load(paths.bench / args.pose_cond / "global_cameras.npz")
         cond_pose = {str(n): p for n, p in zip(d["names"], d["poses"])}
         n_before = len(frames)
         frames = [fr for fr in frames if f"frame_{fr:06d}" in cond_pose]
@@ -168,21 +167,21 @@ def run_infer(args):
            "stride": args.stride, "yaws": yaws, "res": args.res,
            "pose_cond": args.pose_cond, "n_views": len(views),
            "unit": "metric_m"}
-    save_bench(args.tag, names, np.stack(positions), np.stack(poses),
+    save_bench(paths, args.tag, names, np.stack(positions), np.stack(poses),
                np.concatenate(all_pts), np.concatenate(all_rgb), log)
     if args.dump_local:
-        out = BENCH_DIR / args.tag / "local_points.npz"
+        out = paths.bench / args.tag / "local_points.npz"
         np.savez_compressed(out, **{k: np.concatenate(v)
                                     for k, v in local.items()})
         print(f"-> {out} ({len(local)} frames, rig-frame metric xyz+rgb)")
 
 
-def run_baseline(args):
+def run_baseline(paths, args):
     """社内COLMAP coarse (equirect) の軌跡を同じ契約で書き出す (比較用)"""
     from recon3d.postproc.colmap_prior import colmap_centers
 
-    frames, _ = select_frames(args.floor, args.stride, _frange(args))
-    centers, rots = colmap_centers(PROP.colmap_model)
+    frames, _ = select_frames(paths, args.floor, args.stride, _frange(args))
+    centers, rots = colmap_centers(paths.root / "sfm" / "colmap_coarse" / "0")
     names, positions, poses = [], [], []
     for fr in frames:
         if fr not in centers:
@@ -194,9 +193,9 @@ def run_baseline(args):
         positions.append(g[:3, 3])
         poses.append(g)
     print(f"colmap coarse: {len(names)}/{len(frames)} frames registered")
-    log = {"mode": "colmap_coarse", "model": str(PROP.colmap_model),
+    log = {"mode": "colmap_coarse",
            "floor": args.floor, "unit": "colmap_units"}
-    save_bench(args.tag, names, np.stack(positions), np.stack(poses),
+    save_bench(paths, args.tag, names, np.stack(positions), np.stack(poses),
                None, None, log)
 
 
@@ -204,7 +203,7 @@ def _frange(args):
     return tuple(int(v) for v in args.frames.split(":")) if args.frames else None
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("infer", "baseline"):
@@ -234,6 +233,3 @@ def main():
     args = ap.parse_args()
     (run_infer if args.cmd == "infer" else run_baseline)(args)
 
-
-if __name__ == "__main__":
-    main()

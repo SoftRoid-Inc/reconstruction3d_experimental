@@ -23,7 +23,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 
-from recon3d.core.plan_grid import ZUMEN_DIR
 from recon3d.postproc.plan_icp import wall_segments_px
 
 PLAN_TOL_PX = 16          # 図面: 端点↔線分の許容距離 (壁厚相当 ~19cm)
@@ -36,10 +35,10 @@ DENS_BAND = 2             # 密度: 壁線の太さ許容 (±セル)
 
 # ---------------------------------------------------------------- 図面側
 
-def plan_corners(floor):
+def plan_corners(paths, floor):
     """GT壁中心線分から交点を列挙。返り値: list of dict
     {x, y, kind: 'L'|'T', quad: (sx, sy)}  (sx,sy = 壁が伸びる向きの符号)"""
-    segs = wall_segments_px(floor)
+    segs = wall_segments_px(paths, floor)
     horiz = [s for s in segs if abs(s[3] - s[1]) <= abs(s[2] - s[0])]
     vert = [s for s in segs if abs(s[3] - s[1]) > abs(s[2] - s[0])]
     out = []
@@ -313,9 +312,9 @@ def match_corners(dens_cs, deg, plan_cs_cell, s_prior=None, s_rel_tol=0.4,
 
 # ---------------------------------------------------------------- 検証
 
-def _plot_plan(floor, out_dir):
-    corners = plan_corners(floor)
-    bg = np.asarray(Image.open(ZUMEN_DIR / f"{floor}.jpg").convert("L"))
+def _plot_plan(paths, floor, out_dir):
+    corners = plan_corners(paths, floor)
+    bg = np.asarray(Image.open(paths.floors / f"{floor}.jpg").convert("L"))
     fig, ax = plt.subplots(figsize=(13, 9))
     ax.imshow(bg, cmap="gray")
     for c in corners:
@@ -333,17 +332,16 @@ def _plot_plan(floor, out_dir):
     return corners
 
 
-def _plot_island(tag, floor, plan_cs, out_dir):
+def _plot_island(paths, tag, floor, plan_cs, out_dir):
     """島の密度コーナーを検出し、raysアンカーで図面に載せて重なりを確認"""
-    from recon3d.config import OUT_DIR
     from recon3d.postproc.anchor import prepare_island
     from recon3d.core.plan_grid import PlanGrid
     from recon3d.postproc.plan_icp import cells_to_px, transform_pts
-    anchor_p = OUT_DIR / f"anchor_{tag}_rays.json"
+    anchor_p = paths.backend / f"anchor_{tag}_rays.json"
     if not anchor_p.exists():
-        anchor_p = OUT_DIR / f"anchor_{tag}.json"
+        anchor_p = paths.backend / f"anchor_{tag}.json"
     a = json.loads(anchor_p.read_text())
-    d = prepare_island(tag)
+    d = prepare_island(paths, tag)
     if a["mirror_col"] is not None:
         d["density"] = np.ascontiguousarray(d["density"][:, ::-1])
     zz, xx = np.nonzero(d["density"] > DENS_THR)
@@ -351,14 +349,14 @@ def _plot_island(tag, floor, plan_cs, out_dir):
     corners, deg = density_corners(pts)
     print(f"{tag}: {len(corners)} density corners (dominant angle {deg:.0f}deg)")
 
-    grid = PlanGrid(floor)
+    grid = PlanGrid(paths, floor)
     rc = np.array([[c["r"], c["c"]] for c in corners])
     px = cells_to_px(transform_pts(rc, a["s"], a["th"], np.array(a["t"])), grid)
     wall_px = cells_to_px(
         transform_pts(pts[:: max(1, len(pts) // 40000)],
                       a["s"], a["th"], np.array(a["t"])), grid)
 
-    bg = np.asarray(Image.open(ZUMEN_DIR / f"{floor}.jpg").convert("L"))
+    bg = np.asarray(Image.open(paths.floors / f"{floor}.jpg").convert("L"))
     fig, ax = plt.subplots(figsize=(13, 9))
     ax.imshow(bg, cmap="gray")
     ax.scatter(wall_px[:, 0], wall_px[:, 1], s=0.5, c="tomato", alpha=0.4)
@@ -375,10 +373,10 @@ def _plot_island(tag, floor, plan_cs, out_dir):
     plt.close(fig)
 
 
-def plan_corners_cell(floor, grid):
+def plan_corners_cell(paths, floor, grid):
     """図面コーナーを plan cell 座標へ"""
     out = []
-    for c in plan_corners(floor):
+    for c in plan_corners(paths, floor):
         out.append({"rc": ((c["y"] - grid.y0_px) / grid.cell_px,
                            (c["x"] - grid.x0_px) / grid.cell_px),
                     "kind": c["kind"], "quad": c["quad"]})
@@ -416,16 +414,15 @@ def _cont_bound(gap_frames):
     return max(CONT_MIN_M, gap_frames * CONT_SPEED * CONT_MARGIN)
 
 
-def _nearest_anchored(tag, frames, suffix=""):
+def _nearest_anchored(paths, tag, frames, suffix=""):
     """アンカー済みの他島から、この島に時間的に最も近い基準点を拾う
 
     返り値 (この島のindex, 基準の図面px, 基準フレーム, フレーム差)。
     無ければ None。`corner_anchor_<tag>.json` を直接読むので、
     先に別の島をアンカーしてあれば自動で効く。
     """
-    from recon3d.config import OUT_DIR
     known = {}
-    for p in OUT_DIR.glob("corner_anchor_*.json"):
+    for p in paths.backend.glob("corner_anchor_*.json"):
         if p.stem == f"corner_anchor_{tag}":
             continue
         try:
@@ -459,7 +456,7 @@ def _rot_branches(cands, cam_rc):
     return out
 
 
-def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
+def corner_anchor(paths, tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
                   s_prior=None, suffix="_corners", return_info=False,
                   mpu_source="mapany", sweep=S_SWEEP, continuity_ref=False):
     """島をコーナーRANSAC照合でアンカーし、壁ICPで精密化して保存する
@@ -479,22 +476,21 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
     既定の床スラブ推定は2〜5倍ずれるため mapany を既定にしている
     sweep: 事前スケールの倍率掃引。Noneで無効 (従来どおり1点のみ)
     """
-    from recon3d.config import OUT_DIR
     from recon3d.postproc.anchor import prepare_island
     from recon3d.core.plan_grid import PlanGrid
     from recon3d.postproc.plan_icp import cells_to_px, icp_to_walls, segs_to_cells, transform_pts
     if mpu is None and mpu_source:
         from recon3d.postproc.scale_prior import m_per_unit
-        mpu, minfo = m_per_unit(tag, source=mpu_source)
+        mpu, minfo = m_per_unit(paths, tag, source=mpu_source)
         print(f"scale prior: m_per_unit={mpu:.3f} ({minfo})")
-    grid = PlanGrid(floor)
-    d = prepare_island(tag, mpu=mpu)
+    grid = PlanGrid(paths, floor)
+    d = prepare_island(paths, tag, mpu=mpu)
     zz, xx = np.nonzero(d["density"] > DENS_THR)
     pts = np.stack([zz, xx], axis=1).astype(np.float64)
     dens_cs, deg = density_corners(pts)
-    plan_cs = plan_corners_cell(floor, grid)
+    plan_cs = plan_corners_cell(paths, floor, grid)
     if ref_tag:
-        ra = json.loads((OUT_DIR / f"anchor_{ref_tag}.json").read_text())
+        ra = json.loads((paths.backend / f"anchor_{ref_tag}.json").read_text())
         s_prior = ra["s"] * ra["m_per_unit"] / d["m_per_unit"]
         print(f"scale prior {s_prior:.3f} (from {ref_tag})")
     cam_rc = np.stack(
@@ -514,7 +510,7 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
 
     # 時系列連続性: アンカー済みの隣接島から「この島はここにあるはず」を得る
     frames = [int(str(n).replace("frame_", "")) for n in d["names"]]
-    cont_ref = _nearest_anchored(tag, frames) if continuity_ref else None
+    cont_ref = _nearest_anchored(paths, tag, frames) if continuity_ref else None
     if cont_ref:
         j, xy, kf, gap = cont_ref
         print(f"continuity: f{frames[j]} は既知のf{kf}から{gap}フレーム "
@@ -527,12 +523,12 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
         j, xy, _, _ = cont_ref
         px = cells_to_px(transform_pts(cam_rc[j][None], s_, th_, t_), grid)[0]
         from recon3d.eval.gt_traj import mm_per_px
-        return math.dist(px, xy) * mm_per_px() / 1000
+        return math.dist(px, xy) * mm_per_px(paths) / 1000
 
     zz2, xx2 = np.nonzero(d["density"] > 0.15)
     wall_pts = np.stack([zz2, xx2], axis=1).astype(np.float64)
     wall_pts = wall_pts[:: max(1, len(wall_pts) // 20000)]
-    segs = segs_to_cells(wall_segments_px(floor), grid)
+    segs = segs_to_cells(wall_segments_px(paths, floor), grid)
     from recon3d.postproc.anchor_score import AnchorScorer
     scorer = AnchorScorer(grid, wall_pts, segs, cam_rc, s_prior=base)
 
@@ -597,11 +593,11 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
         "n_inliers": int(n_in),
         "anchored_by": f"corners({n_in} inliers)",
     }
-    (OUT_DIR / f"anchor_{tag}{suffix}.json").write_text(
+    (paths.backend / f"anchor_{tag}{suffix}.json").write_text(
         json.dumps(out, indent=1))
     names = [str(n) for n in d["names"]]
     track = {n: (float(x), float(y)) for n, (x, y) in zip(names, px)}
-    (OUT_DIR / f"corner_anchor_{tag}.json").write_text(
+    (paths.backend / f"corner_anchor_{tag}.json").write_text(
         json.dumps(track, indent=1))
     print(f"-> anchor_{tag}{suffix}.json / corner_anchor_{tag}.json")
     if return_info:
@@ -613,25 +609,21 @@ def corner_anchor(tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
     return track
 
 
-def main():
+def main(paths, argv=None):
     import argparse
-    from recon3d.config import OUT_DIR
     ap = argparse.ArgumentParser()
     ap.add_argument("--anchor", default=None, help="'tag:floor' コーナーアンカー実行")
     ap.add_argument("--ref", default=None, help="スケール事前用の配置済み島tag")
-    args = ap.parse_args()
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    args = ap.parse_args(argv)
+    paths.backend.mkdir(parents=True, exist_ok=True)
     if args.anchor:
         tag, floor = args.anchor.split(":")
-        corner_anchor(tag, floor, ref_tag=args.ref)
+        corner_anchor(paths, tag, floor, ref_tag=args.ref)
         return
-    plan_cs = {f: _plot_plan(f, OUT_DIR) for f in ("1F", "2F")}
+    plan_cs = {f: _plot_plan(paths, f, paths.backend) for f in ("1F", "2F")}
     for tag, floor in (("panovggt_A_yawfix", "1F"),
                        ("panovggt_Bcore_yawfix", "2F"),
                        ("panovggt_C_full", "1F")):
-        _plot_island(tag, floor, plan_cs[floor], OUT_DIR)
-    print(f"-> {OUT_DIR}/corners_*.jpg")
+        _plot_island(paths, tag, floor, plan_cs[floor], paths.backend)
+    print(f"-> {paths.backend}/corners_*.jpg")
 
-
-if __name__ == "__main__":
-    main()

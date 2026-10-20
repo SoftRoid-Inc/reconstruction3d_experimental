@@ -71,14 +71,40 @@ def save_overlay(plan, boxes, mm_per_px, out_png):
     plt.close(fig)
 
 
-def main():
+def verify_from_paths(paths, out_dir=None):
+    """全階の2D再投影IoUを測る (main.py plan2model verify の実体)"""
+    from recon3d.plan2model.build import floors_from_paths
+    kw = paths.known_width_mm
+    if kw is None:
+        raise SystemExit(
+            f"図面の実寸が未設定: {paths.floors / 'meta.json'}")
+    out = out_dir or (paths.results / "plan2model")
+    os.makedirs(out, exist_ok=True)
+    rows = []
+    for name, path in floors_from_paths(paths):
+        w = kw.get(name) if isinstance(kw, dict) else kw
+        if w is None:
+            print(f"[verify] {name}: known_width_mm が無い -> skip")
+            continue
+        cfg = ReconConfig(known_width_mm=w)
+        plan = load_floor(path, name)
+        s = scale_mm_per_px(plan, cfg.known_width_mm)
+        boxes = plan_to_boxes(plan, s, cfg, base_z=0.0)
+        iou = reprojection_iou(plan, boxes, s)
+        save_overlay(plan, boxes, s, os.path.join(out, f"overlay_{name}.png"))
+        rows.append({"floor": name, "iou": iou, "mm_per_px": s})
+        print(json.dumps(rows[-1], ensure_ascii=False))
+    return out
+
+
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--floor", required=True, help="NAME=PATH")
     ap.add_argument("--calib-floor", default=None,
                     help="校正に使う階 NAME=PATH (省略時は--floorと同じ)")
     ap.add_argument("--width-mm", type=float, default=9100.0)
     ap.add_argument("--out", required=True)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     cfg = ReconConfig(known_width_mm=args.width_mm)
     name, path = args.floor.split("=", 1)
     plan = load_floor(path, name)
@@ -90,6 +116,3 @@ def main():
     save_overlay(plan, boxes, s, os.path.join(args.out, f"overlay_{name}.png"))
     print(json.dumps({"floor": name, "iou": iou, "mm_per_px": s}))
 
-
-if __name__ == "__main__":
-    main()

@@ -16,50 +16,49 @@ import json
 
 import numpy as np
 
-from recon3d.config import FRAMES_DIR, IMU_DIR
 
 _CACHE = {}
 
 
-def n_frames():
-    return len(sorted(FRAMES_DIR.glob("frame_number_*.jpg")))
+def n_frames(paths):
+    return len(sorted(paths.images.glob("frame_number_*.jpg")))
 
 
-def frame_times(n=None):
+def frame_times(paths, n=None):
     """(時刻配列[秒], source) を返す。sourceは "telemetry" | "uniform" """
-    n = n or n_frames()
-    key = (str(IMU_DIR), n)
+    n = n or n_frames(paths)
+    key = (str(paths.imu), n)
     if key not in _CACHE:
-        p = IMU_DIR / "frame_times.npz"
+        p = paths.imu / "frame_times.npz"
         if p.exists():
             d = np.load(p, allow_pickle=False)
             t, src = np.asarray(d["t"], float), str(d["source"])
             if len(t) >= n:
                 _CACHE[key] = (t[:n], src)
         if key not in _CACHE:
-            meta = json.loads((IMU_DIR / "meta.json").read_text())
+            meta = json.loads((paths.imu / "meta.json").read_text())
             dt = meta["duration_s"] / n
             _CACHE[key] = (np.arange(n) * dt, "uniform")
     return _CACHE[key]
 
 
-def t_of_frame(fr):
+def t_of_frame(paths, fr):
     """フレーム番号(小数可) → 秒。範囲外は端の間隔で外挿"""
-    t, _ = frame_times()
+    t, _ = frame_times(paths)
     return float(np.interp(fr, np.arange(len(t)), t))
 
 
-def frame_of_t(sec):
+def frame_of_t(paths, sec):
     """秒 → フレーム番号(小数)。非等間隔に対応"""
-    t, _ = frame_times()
+    t, _ = frame_times(paths)
     return float(np.interp(sec, t, np.arange(len(t))))
 
 
-def report():
+def report(paths):
     """テレメトリ時刻 vs 等間隔仮定のずれを定量化する"""
-    n = n_frames()
-    meta = json.loads((IMU_DIR / "meta.json").read_text())
-    t, src = frame_times(n)
+    n = n_frames(paths)
+    meta = json.loads((paths.imu / "meta.json").read_text())
+    t, src = frame_times(paths, n)
     dt_uni = meta["duration_s"] / n
     uni = np.arange(n) * dt_uni
     d = np.diff(t)
@@ -82,9 +81,9 @@ def report():
     return out
 
 
-if __name__ == "__main__":
+
+def main(paths, argv=None):
+    """テレメトリ時刻と等間隔仮定のずれを表示する"""
     import argparse
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--report", action="store_true")
-    args = ap.parse_args()
-    report()
+    argparse.ArgumentParser(description=__doc__).parse_args(argv)
+    report(paths)

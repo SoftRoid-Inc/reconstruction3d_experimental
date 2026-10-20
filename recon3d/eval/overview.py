@@ -21,15 +21,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from recon3d.config import BENCH_DIR, SESSION
 from recon3d.core.geometry import rotation_to_y
 from recon3d.eval.frontend import fit2d
 from recon3d.eval.gt_traj import mm_per_px, load_gt
 
 
-def fit_island(tag, gt):
+def fit_island(paths, tag, gt):
     """島をGTへ相似フィット。(fit後xy[used], gt_xy, err, frames[used]) を返す"""
-    d = np.load(BENCH_DIR / tag / "global_cameras.npz")
+    d = np.load(paths.bench / tag / "global_cameras.npz")
     names = [str(n) for n in d["names"]]
     frames = np.array([int(n.replace("frame_", "")) for n in names])
     pos, poses = d["positions"], d["poses"]
@@ -38,7 +37,7 @@ def fit_island(tag, gt):
     p = pos @ rotation_to_y(up / np.linalg.norm(up)).T
     # GTは線形補間 (最近傍スナップはGT欠損区間でATEを水増しする)
     from recon3d.eval.chunk_cmp import gt_interp
-    gt_xy, used = gt_interp(gt, frames, mm_per_px())
+    gt_xy, used = gt_interp(gt, frames, mm_per_px(paths))
     if len(used) < 4:
         return None
     best = None
@@ -54,16 +53,16 @@ def fit_island(tag, gt):
     return xy, gt_xy, err, frames[used]
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default="pv_manifest.json")
     ap.add_argument("--out", default="islands_overview")
-    args = ap.parse_args()
-    gt = load_gt()
-    manifest = json.loads((BENCH_DIR / args.manifest).read_text())
+    args = ap.parse_args(argv)
+    gt = load_gt(paths)
+    manifest = json.loads((paths.bench / args.manifest).read_text())
 
-    gt_sorted = np.array([[gt[f]["x_px"] * mm_per_px() / 1000,
-                           gt[f]["y_px"] * mm_per_px() / 1000]
+    gt_sorted = np.array([[gt[f]["x_px"] * mm_per_px(paths) / 1000,
+                           gt[f]["y_px"] * mm_per_px(paths) / 1000]
                           for f in sorted(gt)])
     fig, ax = plt.subplots(figsize=(11, 9))
     ax.plot(gt_sorted[:, 0], gt_sorted[:, 1], "-", color="0.65", lw=3,
@@ -72,7 +71,7 @@ def main():
     cmap = plt.cm.tab10 if len(manifest) <= 10 else plt.cm.tab20
     rows, pooled, covered = [], [], set()
     for i, m in enumerate(sorted(manifest, key=lambda m: m["a"])):
-        r = fit_island(m["tag"], gt)
+        r = fit_island(paths, m["tag"], gt)
         if r is None:
             rows.append({"tag": m["tag"], "note": "GT対応フレーム不足"})
             continue
@@ -93,23 +92,20 @@ def main():
            / max(len(gt), 1)) if covered else 0.0
     pooled = np.array(pooled)
     summary = {
-        "session": SESSION, "n_islands": len(manifest),
+        "session": paths.name, "n_islands": len(manifest),
         "pooled_median_m": round(float(np.median(pooled)), 3) if len(pooled) else None,
         "pooled_p90_m": round(float(np.percentile(pooled, 90)), 3) if len(pooled) else None,
         "gt_coverage": round(cov, 3), "islands": rows,
     }
     ax.invert_yaxis()
     ax.set_aspect("equal")
-    ax.set_title(f"session {SESSION}: {len(manifest)} islands  "
+    ax.set_title(f"session {paths.name}: {len(manifest)} islands  "
                  f"pooled median {summary['pooled_median_m']}m / "
                  f"p90 {summary['pooled_p90_m']}m / GT coverage {cov:.0%}")
     ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), fontsize=9)
-    fig.savefig(BENCH_DIR / f"{args.out}.png", dpi=120, bbox_inches="tight")
+    fig.savefig(paths.bench / f"{args.out}.png", dpi=120, bbox_inches="tight")
     plt.close(fig)
-    (BENCH_DIR / f"{args.out}.json").write_text(
+    (paths.bench / f"{args.out}.json").write_text(
         json.dumps(summary, indent=1, ensure_ascii=False))
     print(json.dumps(summary, indent=1, ensure_ascii=False))
 
-
-if __name__ == "__main__":
-    main()

@@ -17,7 +17,6 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial import cKDTree
 
-from recon3d.config import BENCH_DIR, RESULTS_DIR
 from recon3d.core.geometry import apply, compose, sim3_umeyama
 from recon3d.core.geometry import rotation_to_y
 from recon3d.core.io_ply import read_ply_xyzrgb
@@ -125,7 +124,7 @@ def lock_rotation_flowstate(g_rots, g_names, cur_rots, cur_names, fs_yaw):
     return Rg_g.T @ rot_y(o_c - o_g) @ Rg_c
 
 
-def chain(cdirs, yaw_lock=False):
+def chain(paths, cdirs, yaw_lock=False):
     """チャンク列を順に連結し (chunks, 変換列T, ログ) を返す
 
     yaw_lock: False=ICPが回転も解く (既定) / True=ヨー一定を仮定してロック /
@@ -138,7 +137,7 @@ def chain(cdirs, yaw_lock=False):
     fs_yaw = None
     if yaw_lock == "flowstate":
         from recon3d.imu.flowstate_yaw import load as load_fs
-        fs_yaw = load_fs()
+        fs_yaw = load_fs(paths)
         if fs_yaw is None:
             print("[chain] flowstate_yaw.npz が無い -> 従来のヨーロックへ")
             yaw_lock = True
@@ -274,18 +273,18 @@ def drift_correct(chunks, T, fs_yaw, min_links=3):
     return out, slope
 
 
-def chain_and_save(cdirs, tag, yaw_lock=False, drift_fix=False):
+def chain_and_save(paths, cdirs, tag, yaw_lock=False, drift_fix=False):
     """チャンク列を連結して frontend_bench/<tag>/ に書き出す (mainの本体)
 
     drift_fix: 連結後にヨーの系統バイアスを除く (要 imu/flowstate_yaw)
     """
-    chunks, T, log = chain(cdirs, yaw_lock=yaw_lock)
+    chunks, T, log = chain(paths, cdirs, yaw_lock=yaw_lock)
     if drift_fix:
         from recon3d.imu.flowstate_yaw import load as load_fs
-        T, sl = drift_correct(chunks, T, load_fs())
+        T, sl = drift_correct(chunks, T, load_fs(paths))
         print(f"[drift_fix] ヨーバイアス {np.degrees(sl):+.2f}°/chunk を除去")
     # グローバル軌跡と点群
-    out = BENCH_DIR / tag
+    out = paths.bench / tag
     out.mkdir(parents=True, exist_ok=True)
     frame_pos, frame_pose = {}, {}
     all_pts, all_rgb = [], []
@@ -324,7 +323,7 @@ def chain_and_save(cdirs, tag, yaw_lock=False, drift_fix=False):
     return out
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--chunks-root", required=True)
     ap.add_argument("--tag", required=True)
@@ -332,17 +331,14 @@ def main():
                     help="'a:b' 使用チャンク範囲 (階段を挟まない区間評価用)")
     ap.add_argument("--yaw-lock", action="store_true",
                     help="方位ロック: 連結回転を重力+一定ヨーに固定 (s,tのみICP)")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     root = Path(args.chunks_root)
     if not root.is_absolute():
-        root = RESULTS_DIR / args.chunks_root
+        root = paths.results / args.chunks_root
     cdirs = sorted(root.glob("chunk_*"), key=lambda p: int(p.name.split("_")[1]))
     if args.chunk_range:
         a, b = (int(v) for v in args.chunk_range.split(":"))
         cdirs = cdirs[a:b]
     print(f"{len(cdirs)} chunks from {root}")
-    chain_and_save(cdirs, args.tag, yaw_lock=args.yaw_lock)
+    chain_and_save(paths, cdirs, args.tag, yaw_lock=args.yaw_lock)
 
-
-if __name__ == "__main__":
-    main()

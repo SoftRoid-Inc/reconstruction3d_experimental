@@ -17,7 +17,6 @@ import json
 
 import numpy as np
 
-from recon3d.config import RESULTS_DIR
 from recon3d.core.geometry import rotation_to_y
 
 # (session, 開始, 終了, ラベル) — 診断で局所破綻と判定された区間を含む16フレーム窓
@@ -64,10 +63,10 @@ def gt_interp(gt, frames, mm_per_px):
     return np.array(out), ok
 
 
-def score(tag, gt, mm_per_px):
+def score(paths, tag, gt, mm_per_px):
     """pcd/<tag>/cameras.npz を GT と照合 → 指標dict"""
     from recon3d.eval.frontend import fit2d
-    d = np.load(RESULTS_DIR / "pcd" / tag / "cameras.npz")
+    d = np.load(paths.results / "pcd" / tag / "cameras.npz")
     frames = np.array([int(str(n).replace("frame_", "")) for n in d["names"]])
     poses = d["poses"]
     ups = poses[:, :3, 1]
@@ -88,7 +87,7 @@ def score(tag, gt, mm_per_px):
             best = {"mirror": mirror, "ate_median_m": float(np.median(e)),
                     "ate_p90_m": float(np.percentile(e, 90)),
                     "ate_max_m": float(e.max())}
-    st = RESULTS_DIR / "pcd" / tag / "pcd_stats.json"
+    st = paths.results / "pcd" / tag / "pcd_stats.json"
     if st.exists():
         s = json.loads(st.read_text())
         best["n_points"] = s.get("n_points")
@@ -100,12 +99,12 @@ def score(tag, gt, mm_per_px):
                for k, v in best.items()}}
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--tags", nargs="*", default=None)
     ap.add_argument("--preset", choices=("breakdown", "control"), default=None)
     ap.add_argument("--out", default=None, help="結果JSONの保存先")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     if args.preset and not args.tags:
         for s, a, b, note in (BREAKDOWN if args.preset == "breakdown" else CONTROL):
@@ -113,8 +112,8 @@ def main():
         return
 
     from recon3d.eval.gt_traj import mm_per_px, load_gt
-    gt = load_gt()
-    rows = [score(t, gt, mm_per_px()) for t in args.tags]
+    gt = load_gt(paths)
+    rows = [score(paths, t, gt, mm_per_px(paths)) for t in args.tags]
     w = max(len(r["tag"]) for r in rows)
     print(f"{'tag':{w}}  {'n':>3} {'median':>7} {'p90':>7} {'max':>7}  spread_t/r")
     for r in rows:
@@ -130,6 +129,3 @@ def main():
         from pathlib import Path
         Path(args.out).write_text(json.dumps(rows, indent=1, ensure_ascii=False))
 
-
-if __name__ == "__main__":
-    main()

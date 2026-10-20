@@ -19,40 +19,26 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 
-from recon3d.config import PROP, PROJECT_ROOT, RESULTS_DIR, SESSION
-from recon3d.core.plan_grid import ZUMEN_DIR
 
-def gt_dir(session=None):
-    """GT CSV群の置き場。物件ごとに持つ
+def gt_dir(paths):
+    """GT CSV群の置き場 = データセット直下
 
-    28-AAAAA へのフォールバックは**プロジェクト内の物件だけ**に効かせる。
-    外部データセット (入力ディレクトリ渡し) でこれを許すと、GTを持たない
-    新しい建物を 28-AAAAA のGTで評価して例外ゼロで完走する
-    (2026-10-09に実際に踏んだ事故の経路)。
+    **他データセットへのフォールバックはしない**。かつては 28-AAAAA へ
+    落ちる経路があり、GTを持たない建物を別物件のGTで評価して例外ゼロで
+    完走した (2026-10-09)。無ければ無いまま FileNotFoundError にする。
     """
-    from recon3d.config import PROPERTY
-    root = (PROPERTY[session] if session else PROP).root
-    if (root / "trajectory_points.csv").exists():
-        return root
-    if PROJECT_ROOT in root.parents or root == PROJECT_ROOT:
-        return PROJECT_ROOT / "28-AAAAA"
-    return root     # 外部データセット: 存在しないので後段が FileNotFoundError
+    return paths.root
 
 
-GT_DIR = gt_dir()
-OUT_DIR = RESULTS_DIR / "eval_gt"
-DRAWING_W, DRAWING_H = PROP.drawing_wh  # 図面画像サイズ (yは下原点→上原点に反転が必要)
-
-
-def _plan_json():
+def _plan_json(paths):
     """スケール導出に使う図面JSON (階名, Path)。無ければ None
 
     「1F」決め打ちをやめた。B1F や 2F から始まる部分スキャンでは 1F.json が
     存在せず、黙って mm/px=None に落ちていた。
     """
-    if not ZUMEN_DIR.is_dir():
+    if not paths.floors.is_dir():
         return None
-    cands = sorted(p for p in ZUMEN_DIR.glob("*.json") if len(p.stem) <= 4)
+    cands = sorted(p for p in paths.floors.glob("*.json") if len(p.stem) <= 4)
     if not cands:
         return None
     pick = next((p for p in cands if p.stem == "1F"), cands[0])
@@ -60,7 +46,7 @@ def _plan_json():
 
 
 @functools.lru_cache(maxsize=None)
-def mm_per_px():
+def mm_per_px(paths):
     """図面実測スケール [mm/px]。導出できなければ None
 
     **import 時に評価してはいけない** (旧 `MM_PER_PX` 定数)。図面JSONが
@@ -68,15 +54,15 @@ def mm_per_px():
     このモジュールを top-level import する20モジュールと、`plan_icp` 経由の
     二次伝播16モジュール (= アンカー経路まるごと) が import 不能になる。
     """
-    if PROP.mm_per_px is not None:
-        return PROP.mm_per_px
-    if PROP.known_width_mm is None:
+    if paths.mm_per_px is not None:
+        return paths.mm_per_px
+    if paths.known_width_mm is None:
         return None             # 図面の実寸が無ければ px→m は決められない
-    found = _plan_json()
+    found = _plan_json(paths)
     if found is None:
         return None
     floor, path = found
-    kw = PROP.known_width_mm
+    kw = paths.known_width_mm
     kw = kw.get(floor) if isinstance(kw, dict) else kw
     if kw is None:
         return None
@@ -110,15 +96,14 @@ def _floor_names(gdir, rows):
     return names
 
 
-def session_meta(session=None):
-    """セッション(MMDD) -> {'traj': trajectory_id集合, 'floors': [(a,b,name)]}
-    trajectory_data_by_scan_data_id.csv + floor_info.csv から導出"""
-    from recon3d.config import PROP, PROPERTY, SESSION
-    session = session or SESSION
-    # 外部データセットは撮影日とセッション名が一致しないので gt_session を見る
-    prop = PROPERTY.get(session, PROP)
-    key = getattr(prop, "gt_session", None) or session
-    gdir = gt_dir(session)
+def session_meta(paths):
+    """撮影日(MMDD) -> {'traj': trajectory_id集合, 'floors': [(a,b,name)]}
+
+    trajectory_data_by_scan_data_id.csv + floor_info.csv から導出。
+    撮影日キーは floors/meta.json の `gt_session`、無ければ入力ディレクトリ名。
+    """
+    key = paths.meta.get("gt_session") or paths.name
+    gdir = gt_dir(paths)
     rows = list(csv.DictReader(
         open(gdir / "trajectory_data_by_scan_data_id.csv")))
     floor_names = _floor_names(gdir, rows)
@@ -135,28 +120,23 @@ def session_meta(session=None):
         if rng not in m["floors"]:
             m["floors"].append(rng)
     if key not in meta:
-        raise KeyError(f"session {session} (key {key}) not in metadata "
-                       f"({list(meta)})")
+        raise KeyError(f"GT metadata に撮影日 {key!r} が無い ({list(meta)})。"
+                       "floors/meta.json の gt_session で指定できます")
     return meta[key]
 
 
-def load_gt(session=None):
-    """frame -> {floor, x_px, y_px} (GTはほぼ1-2フレーム刻み)。
-    sessionはconfig.SESSION(環境変数IMG_SESSION)既定。
-    正式GTは <物件>/trajectory_points.csv。そこに無いセッションだけ
-    手動登録由来の backend/gt_trajectory.csv (align_toolが書く正規化座標、
-    yは下原点) へフォールバックする。"""
-    # フォールバック経路は results/<session>/ を読むので、引数で渡された
-    # セッションの物件・図面サイズに揃える (凍結済みの定数を使うと別セッションの
-    # GTを黙って返してしまう。2026-10-09に実際に踏んだ)
-    from recon3d.config import PROPERTY
-    prop = PROPERTY[session] if session else PROP
-    dw, dh = prop.drawing_wh
+def load_gt(paths):
+    """frame -> {floor, x_px, y_px} (GTはほぼ1-2フレーム刻み)
+
+    正式GTは `<入力>/trajectory_points.csv`。無ければ手動登録由来の
+    `results/backend/gt_trajectory.csv` (align_tool が書く正規化座標、
+    yは下原点) にフォールバックする。
+    """
+    dw, dh = paths.drawing_wh
     try:
-        m = session_meta(session)
-    except KeyError:
-        csv_p = (prop.root / "results" / (session or SESSION)
-                 / "backend" / "gt_trajectory.csv")
+        m = session_meta(paths)
+    except (KeyError, FileNotFoundError):
+        csv_p = paths.backend / "gt_trajectory.csv"
         if not csv_p.exists():
             raise
         gt = {}
@@ -170,7 +150,7 @@ def load_gt(session=None):
                 }
         return gt
     gt = {}
-    with open(gt_dir(session) / "trajectory_points.csv") as f:
+    with open(gt_dir(paths) / "trajectory_points.csv") as f:
         for r in csv.DictReader(f):
             if r.get("trajectory_id") and r["trajectory_id"] not in m["traj"]:
                 continue
@@ -193,11 +173,11 @@ def gt_at(gt, frame, max_gap=4):
     return gt[best]
 
 
-def evaluate_track(name, samples, gt):
+def evaluate_track(paths, name, samples, gt):
     """samples: [{frame, floor, x_px, y_px}] を評価"""
     floor_ok, errs, errs_all = 0, [], []
     n = 0
-    mpx = mm_per_px()
+    mpx = mm_per_px(paths)
     if mpx is None:
         raise ValueError(
             "mm/px が導出できないので誤差をメートルで出せない。"
@@ -223,48 +203,3 @@ def evaluate_track(name, samples, gt):
     }
     print(res)
     return res
-
-
-def main():
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    gt = load_gt()
-    print(f"GT points: {len(gt)}")
-    results = []
-
-    # 1) PF統合軌跡
-    fused = json.loads((RESULTS_DIR / "fuse" / "fused.json").read_text())
-    results.append(evaluate_track("temporal_fuse (PF)", fused["track"], gt))
-
-    # 2) 単フレーム照合 (Mask2Former / GTセグ)
-    for tag, label in (("loc", "localize (Mask2Former)"),
-                       ("loc_gt", "localize (GTセグ)")):
-        summ = json.loads((RESULTS_DIR / tag / "summary.json").read_text())
-        samples = [{"frame": int(k.replace("frame_", "")), **v}
-                   for k, v in summ.items() if "x_px" in v]
-        results.append(evaluate_track(label, samples, gt))
-
-    (OUT_DIR / "summary.json").write_text(json.dumps(results, indent=1))
-
-    # GT vs PF軌跡の重畳図 (階ごと)
-    for floor in ("1F", "2F"):
-        bg = np.asarray(Image.open(ZUMEN_DIR / f"{floor}.jpg").convert("L"))
-        fig, ax = plt.subplots(figsize=(10, 8))
-        ax.imshow(bg, cmap="gray")
-        g = [(f, v) for f, v in sorted(gt.items()) if v["floor"] == floor]
-        ax.plot([v["x_px"] for _, v in g], [v["y_px"] for _, v in g],
-                "-", color="lime", linewidth=2, label="GT")
-        t = [s for s in fused["track"] if s["floor"] == floor]
-        ax.plot([s["x_px"] for s in t], [s["y_px"] for s in t],
-                "-o", color="red", markersize=3, linewidth=1, alpha=0.7,
-                label="PF estimate")
-        ax.legend()
-        ax.set_title(f"{floor}: GT vs PF trajectory")
-        ax.set_axis_off()
-        fig.savefig(OUT_DIR / f"gt_vs_pf_{floor}.jpg", dpi=120,
-                    bbox_inches="tight")
-        plt.close(fig)
-    print(f"done -> {OUT_DIR}")
-
-
-if __name__ == "__main__":
-    main()

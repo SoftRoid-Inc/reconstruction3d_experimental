@@ -19,8 +19,7 @@ from PIL import Image
 from scipy import ndimage
 from scipy.signal import fftconvolve
 
-from recon3d.core.plan_grid import ZUMEN_DIR, PlanGrid
-from recon3d.core.panovggt import PCD_DIR
+from recon3d.core.plan_grid import PlanGrid
 
 THETA_STEP_DEG = 3
 SCALES = np.geomspace(0.5, 1.1, 12)   # PanoVGGT点群は実寸より膨張する傾向が
@@ -182,20 +181,20 @@ def draw(grid, bg, d, best, cell_ratio, cam_px, names, path, title):
     plt.close(fig)
 
 
-def main():
+def main(paths, argv=None):
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag", default=None)
-    args = ap.parse_args()
-    out_dir = PCD_DIR / args.tag if args.tag else PCD_DIR
+    args = ap.parse_args(argv)
+    out_dir = paths.pcd / args.tag if args.tag else paths.pcd
 
     d = dict(np.load(out_dir / "density.npz", allow_pickle=False))
     # 密度セルは CELL_M=0.05m相当で作ってあり図面セル(RES_M=0.05m)と名目1:1。
     # スケール推定の誤差は SCALES の±30%探索で吸収する
     cell_ratio = 1.0
 
-    grids = {f: PlanGrid(f) for f in ("1F", "2F")}
-    bgs = {f: np.asarray(Image.open(ZUMEN_DIR / f"{f}.jpg").convert("L"))
+    grids = {f: PlanGrid(paths, f) for f in ("1F", "2F")}
+    bgs = {f: np.asarray(Image.open(paths.floors / f"{f}.jpg").convert("L"))
            for f in grids}
 
     cam_rc = np.stack(
@@ -231,6 +230,3 @@ def main():
     print(f"selected floor: {floor}")
     print(f"done -> {out_dir}")
 
-
-if __name__ == "__main__":
-    main()

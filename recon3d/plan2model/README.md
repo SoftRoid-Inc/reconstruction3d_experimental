@@ -4,48 +4,62 @@ GT(labelme)または CubiCasa の prediction.json から、壁・柱・開口(�
 構成される3Dモデル(glTF/OBJ)を生成する。詳細な経緯は `../MODEL_RECONSTRUCTION.md` と
 `../docs/superpowers/plans/2026-09-03-recon3d-gt-to-3d.md` を参照。
 
-## 使い方(cubicasaコンテナ内で実行)
+## 使い方
+
+入口は**リポジトリ直下の `main.py`** (compose サービス `recon3d`)。
+入力は他の段と同じ固定構造のディレクトリで、必要なのは `floors/` だけ。
+
+```
+<input>/
+  floors/  1F.json 1F.jpg 2F.json 2F.jpg  meta.json
+  results/plan2model/                       ← 出力
+```
+
+`floors/meta.json` に図面の実寸を書く (最外壁芯間のx方向スパン[mm])。
+階でスパンが違うなら階名→mm の辞書にする。
+
+```json
+{"known_width_mm": 9100.0}
+```
 
 ```bash
 cd /home/maren/programming
 
+# 2D再投影検証 (IoU + オーバーレイPNG) — まずこれで図面の読みを確かめる
+docker compose exec -T recon3d python main.py plan2model verify \
+  input=/code2/reconstruction_3d/28-AAAAA/recon_11177
+
 # モデル生成 (glb / obj / report.json)
-docker compose exec -T cubicasa env PYTHONPATH=/code2/reconstruction_3d \
-  python -m recon3d.build \
-  --floors 1F=/code2/reconstruction_3d/28-AAAAA/zumen/1F.json \
-           2F=/code2/reconstruction_3d/28-AAAAA/zumen/2F.json \
-  --width-mm 9100 --depth-mm 9555 \
-  --out /code2/reconstruction_3d/recon3d/output/28-AAAAA
-
-# 2D再投影検証 (IoU + オーバーレイPNG)
-docker compose exec -T cubicasa env PYTHONPATH=/code2/reconstruction_3d \
-  python -m recon3d.verify \
-  --floor 1F=/code2/reconstruction_3d/28-AAAAA/zumen/1F.json \
-  --calib-floor 1F=/code2/reconstruction_3d/28-AAAAA/zumen/1F.json \
-  --out /code2/reconstruction_3d/recon3d/output/28-AAAAA
-
-# テスト
-docker compose exec -T cubicasa env PYTHONPATH=/code2/reconstruction_3d \
-  python -m pytest /code2/reconstruction_3d/recon3d/tests -v
+docker compose exec -T recon3d python main.py plan2model build \
+  input=/code2/reconstruction_3d/28-AAAAA/recon_11177
 
 # コンテナ生成ファイルの所有権修正
-docker compose exec -T cubicasa chown -R 1001:1001 /code2/reconstruction_3d/recon3d/output
+docker compose exec -T recon3d chown -R 1001:1001 \
+  /code2/reconstruction_3d/28-AAAAA/recon_11177/results
 ```
 
-`--floors NAME=PATH` は下階から順。PATHはlabelme GTでもprediction.jsonでもよい
-(スキーマ自動判別)。再学習済みモデルが来たらパスを差し替えるだけ。
+階は `floors/*.json` から**下階から順に**自動で拾う (`1F` `2F` `B1F` `RF` …、
+`meta.json` は除外)。PATHはlabelme GTでもprediction.jsonでもよい
+(スキーマ自動判別)。再学習済みモデルが来たら JSON を差し替えるだけ。
+
+### テスト
+
+```bash
+docker compose exec -T recon3d python -m pytest \
+  /code2/reconstruction_3d/recon3d/plan2model/tests -v
+```
 
 ## モジュール構成
 
 | ファイル | 責務 |
 |---|---|
 | `loader.py` | labelme GT / prediction.json → 共通スキーマ `FloorPlan`(軸平行`Rect`のリスト) |
-| `calibrate.py` | px→mm校正。外周垂直壁の中心線xスパン ↔ 通り芯寸法(--width-mm)の比。y方向で交差検証 |
+| `calibrate.py` | px→mm校正。外周垂直壁の中心線xスパン ↔ 通り芯寸法(`known_width_mm`)の比。y方向で交差検証 |
 | `config.py` | 高さ仮定値(階高2900 / 窓 腰900+H1100 / ドアH2000 / スラブ150)。全てCLI・コードから上書き可 |
 | `geometry.py` | 開口の振り分けとボックス生成(下記) |
 | `mesh.py` | Box3D列+スラブ → trimesh.Scene → glb/obj |
-| `build.py` | CLI。複数階の組み立て(階iのbase_z = i×階高)と report.json |
-| `verify.py` | 壁+柱の2D再投影 vs GT の pixel IoU、オーバーレイPNG |
+| `build.py` | `build_from_paths`。複数階の組み立て(階iのbase_z = i×階高)と report.json |
+| `verify.py` | `verify_from_paths`。壁+柱の2D再投影 vs GT の pixel IoU、オーバーレイPNG |
 
 ## 重要な設計事実(28-AAAAAで実測)
 
@@ -62,9 +76,9 @@ docker compose exec -T cubicasa chown -R 1001:1001 /code2/reconstruction_3d/reco
 
 ## 検証結果 (28-AAAAA GT)
 
-- 2D再投影IoU: **1F=1.0 / 2F=1.0**(`output/28-AAAAA/overlay_{1F,2F}.png` で目視確認可)
+- 2D再投影IoU: **1F=1.0 / 2F=1.0**(`results/plan2model/overlay_{1F,2F}.png` で目視確認可)
 - スケール交差検証誤差: 0.28%(y方向9555mm比)
-- 生成物: `output/28-AAAAA/model.glb`(カテゴリ別色分け・窓は半透明)、`model.obj`、
+- 生成物: `results/plan2model/model.glb`(カテゴリ別色分け・窓は半透明)、`model.obj`、
   `report.json`(スケール・仮定値・要素数)、`render_iso.png`(簡易等角図)
 
 ## 既知の制限 / 次の課題

@@ -7,7 +7,6 @@
 hier は直接アンカーが失敗した島の保険として残す。
 """
 import concurrent.futures as cf
-import os
 import shutil
 
 # 2段アンカー: 1段目で全島を独立に解き、2段目はその結果を時系列の基準にして
@@ -23,33 +22,31 @@ CONTINUITY_STAGE = False
 def _anchor_one(args):
     """1島をアンカー (プロセス並列のワーカー。例外は文字列で返す)
 
-    args は 4要素 (tag, floor, session_ref, suffix) か、継続性拘束を使う
+    args は 4要素 (tag, floor, root, suffix) か、継続性拘束を使う
     5要素 (+cont)。`ProcessPoolExecutor.map` に渡すので1引数にまとめてある。
+    `Paths` そのものでなく**入力ディレクトリのパス**を渡し、子側で組み直す。
+    spawn/forkserver へ切り替わっても pickle できる形に保つため。
     """
-    tag, floor, session_ref, suffix = args[:4]
+    tag, floor, root, suffix = args[:4]
     cont = args[4] if len(args) > 4 else False
-    # 子プロセスでconfigを凍結させる。**SESSION ではなく SESSION_REF** を
-    # 渡すこと (SESSION はデータセット登録後の派生名で、env に戻すと
-    # レジストリに無くて落ちる)。fork では親の config がコピーされるので
-    # 実質無効だが、spawn/forkserver へ切り替わったときの保険
-    os.environ["IMG_SESSION"] = session_ref
+    from recon3d.paths import from_input
     from recon3d.postproc.corners import corner_anchor
+    paths = from_input(root)
     try:
-        _, info = corner_anchor(tag, floor, s_prior=1.0, suffix=suffix,
+        _, info = corner_anchor(paths, tag, floor, s_prior=1.0, suffix=suffix,
                                 return_info=True, continuity_ref=cont)
         return tag, None, info.get("score", 0.0)
     except Exception as e:                          # noqa: BLE001
         return tag, f"{type(e).__name__}: {e}", 0.0
 
 
-def anchor_islands(manifest, jobs=None):
-    from recon3d.config import SESSION_REF
+def anchor_islands(paths, manifest, jobs=None):
     no_floor = [m["tag"] for m in manifest if not m.get("floor")]
     if no_floor:
         print(f"[anchor] 階が未割当の島をskip: {no_floor}\n"
-              f"  → python -m recon3d.core.floor_assign --template "
+              f"  → python main.py tool floor_assign --template "
               f"で雛形を作り、backend/floor_assign.json を編集してください")
-    todo = [(m["tag"], m["floor"], SESSION_REF)
+    todo = [(m["tag"], m["floor"], paths.root)
             for m in manifest if m.get("floor")]
     if not todo:
         return
@@ -74,12 +71,11 @@ def anchor_islands(manifest, jobs=None):
         return
     # 2段目: 1段目の全島を基準に、**1本ずつ順番に**解き直す
     print(f"[anchor] 2段目: 継続性拘束で{len(todo)}島を再試行")
-    from recon3d.config import OUT_DIR
     for t, f, sess in todo:
         _, err, _ = _anchor_one((t, f, sess, "_cont", True))
         if err:
             print(f"[anchor] {t}: 2段目失敗 ({err}) -> 1段目を維持")
             continue
-        src = OUT_DIR / f"anchor_{t}_cont.json"
+        src = paths.backend / f"anchor_{t}_cont.json"
         if src.exists():
-            shutil.copy(str(src), str(OUT_DIR / f"anchor_{t}_corners.json"))
+            shutil.copy(str(src), str(paths.backend / f"anchor_{t}_corners.json"))

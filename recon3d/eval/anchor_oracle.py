@@ -23,7 +23,6 @@ import math
 
 import numpy as np
 
-from recon3d.config import BENCH_DIR
 from recon3d.core.plan_grid import PlanGrid
 from recon3d.eval.gt_traj import mm_per_px, load_gt
 from recon3d.postproc.anchor import prepare_island
@@ -38,19 +37,19 @@ from recon3d.postproc.plan_icp import (cells_to_px, icp_to_walls,
 OK_M = 1.0        # これ以内なら「正解候補」とみなす (島は数十mなので十分厳しい)
 
 
-def candidates(tag, floor, s_prior=1.0, mpu=None, s_rel_tol=0.4,
+def candidates(paths, tag, floor, s_prior=1.0, mpu=None, s_rel_tol=0.4,
                top_k=12, sweep=None):
     """島の全候補を (スコア一式, 変換後のカメラpx, 付随情報) で返す
 
     sweep: 事前スケールの倍率リスト。スケール事前に誤差があるときは
     1点に賭けず複数倍率で候補を出して混ぜる (スコア関数が信頼できる前提)。
     """
-    grid = PlanGrid(floor)
-    d = prepare_island(tag, mpu=mpu)
+    grid = PlanGrid(paths, floor)
+    d = prepare_island(paths, tag, mpu=mpu)
     zz, xx = np.nonzero(d["density"] > DENS_THR)
     dens_cs, deg = density_corners(
         np.stack([zz, xx], axis=1).astype(np.float64))
-    plan_cs = plan_corners_cell(floor, grid)
+    plan_cs = plan_corners_cell(paths, floor, grid)
     cands = []
     for mult in (sweep or [1.0]):
         cands += match_corners(dens_cs, deg, plan_cs, s_prior=s_prior * mult,
@@ -64,7 +63,7 @@ def candidates(tag, floor, s_prior=1.0, mpu=None, s_rel_tol=0.4,
     zz2, xx2 = np.nonzero(d["density"] > 0.15)
     wall_pts = np.stack([zz2, xx2], axis=1).astype(np.float64)
     wall_pts = wall_pts[:: max(1, len(wall_pts) // 20000)]
-    segs = segs_to_cells(wall_segments_px(floor), grid)
+    segs = segs_to_cells(wall_segments_px(paths, floor), grid)
     scorer = AnchorScorer(grid, wall_pts, segs, cam_rc, s_prior=s_prior)
 
     # pre_* = ICP前の素の変換で採点した値 (足切りの妥当性を測るため)
@@ -82,17 +81,17 @@ def candidates(tag, floor, s_prior=1.0, mpu=None, s_rel_tol=0.4,
     return out, [str(n) for n in d["names"]]
 
 
-def gt_err(px, names, gt):
+def gt_err(paths, px, names, gt):
     """候補の軌跡とGTの残差 median [m] (GTのあるフレームのみ)"""
     e = []
     for p, nm in zip(px, names):
         f = int(nm.replace("frame_", ""))
         if f in gt:
             e.append(math.dist(p, (gt[f]["x_px"], gt[f]["y_px"])))
-    return float(np.median(e)) * mm_per_px() / 1000 if len(e) >= 4 else None
+    return float(np.median(e)) * mm_per_px(paths) / 1000 if len(e) >= 4 else None
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default="pv_gtseg_manifest.json")
     ap.add_argument("--islands", nargs="*", default=None)
@@ -104,11 +103,11 @@ def main():
     ap.add_argument("--top-k", type=int, default=12, help="候補数の上限")
     ap.add_argument("--s-sweep", default=None,
                     help="事前スケールの倍率を掃引 (例 0.7,0.85,1.0,1.2,1.4)")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     sweep = ([float(v) for v in args.s_sweep.split(",")]
              if args.s_sweep else None)
-    gt = load_gt()
-    man = json.loads((BENCH_DIR / args.manifest).read_text())
+    gt = load_gt(paths)
+    man = json.loads((paths.bench / args.manifest).read_text())
     rows = []
     for m in man:
         if args.islands and m["tag"] not in args.islands:
@@ -118,10 +117,10 @@ def main():
         mpu = None
         if args.mpu_source != "slab":
             from recon3d.postproc.scale_prior import m_per_unit
-            mpu, minfo = m_per_unit(m["tag"], source=args.mpu_source)
+            mpu, minfo = m_per_unit(paths, m["tag"], source=args.mpu_source)
             print(f"{m['tag']}: m_per_unit={mpu:.3f} ({minfo})")
         try:
-            cands, names = candidates(m["tag"], m["floor"], mpu=mpu,
+            cands, names = candidates(paths, m["tag"], m["floor"], mpu=mpu,
                                       s_rel_tol=args.s_rel_tol,
                                       top_k=args.top_k, sweep=sweep)
         except Exception as e:
@@ -131,7 +130,7 @@ def main():
             print(f"{m['tag']}: 候補なし")
             continue
         for c in cands:
-            c["err"] = gt_err(c["px"], names, gt)
+            c["err"] = gt_err(paths, c["px"], names, gt)
         ok = [c for c in cands if c["err"] is not None]
         if not ok:
             print(f"{m['tag']}: GT対応なし")
@@ -166,9 +165,6 @@ def main():
             n = sum(1 for r in rows if r[f"{sc}_err_m"] <= OK_M)
             mr = np.mean([r[f"{sc}_rank"] for r in rows])
             print(f"{sc:16} {n:4d}/{len(rows):<4d} {mr:14.1f}")
-    (BENCH_DIR / "anchor_oracle.json").write_text(
+    (paths.bench / "anchor_oracle.json").write_text(
         json.dumps(rows, indent=1, ensure_ascii=False))
 
-
-if __name__ == "__main__":
-    main()

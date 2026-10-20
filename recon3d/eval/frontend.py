@@ -16,21 +16,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from recon3d.config import BENCH_DIR
-from recon3d.config import SESSION
 from recon3d.core.geometry import rotation_to_y
 from recon3d.eval.gt_traj import mm_per_px, load_gt
 
 
-def stair_ranges():
-    """階段区間 (0828は歴代評価と同じ実測値を維持、他はSESSION_CFG由来)"""
-    if SESSION == "0828":
-        return [(214, 243), (400, 414)]
-    from recon3d.config import SESSION_CFG
-    cfg = SESSION_CFG.get(SESSION)
-    if not cfg:
-        return []
-    return [r for r in (cfg["ascend"], cfg["descend"]) if r != (0, 0)]
+def stair_ranges(paths):
+    """階段区間。IMU検出 (imu/transitions.json) から取る"""
+    from recon3d.core.stair_check import imu_stair_ranges
+    return imu_stair_ranges(paths)
 
 
 def fit2d(src, dst):
@@ -45,8 +38,8 @@ def fit2d(src, dst):
     return lambda p: (s * (p @ R.T)) + (mu_d - s * R @ mu_s)
 
 
-def evaluate(tag, gt, frame_range=None):
-    d = np.load(BENCH_DIR / tag / "global_cameras.npz")
+def evaluate(paths, tag, gt, frame_range=None):
+    d = np.load(paths.bench / tag / "global_cameras.npz")
     names = [str(n) for n in d["names"]]
     frames = np.array([int(n.replace("frame_", "")) for n in names])
     pos = d["positions"]
@@ -63,7 +56,7 @@ def evaluate(tag, gt, frame_range=None):
     # GTは線形補間する。最近傍スナップ(旧実装)だと1フレームのずれが
     # 0.5s×0.6m/s = 約0.3mの誤差として乗り、GT欠損区間でATEを大きく水増しした
     from recon3d.eval.chunk_cmp import gt_interp
-    mpx = mm_per_px()
+    mpx = mm_per_px(paths)
     if mpx is None:
         # ATEはメートルで出す約束なので、px→m が決まらない入力では評価しない。
         # 壁注釈だけでは足りず**図面の実寸 (known_width_mm) も要る**
@@ -88,8 +81,8 @@ def evaluate(tag, gt, frame_range=None):
     # 階段区間をまたぐ連続性 (隣接フレーム間の移動距離)
     step = np.linalg.norm(np.diff(best["xy"], axis=0), axis=1)
     stair_steps = [s for i, s in enumerate(step)
-                   if any(a <= frames[i] <= b for a, b in stair_ranges())]
-    chain_path = BENCH_DIR / tag.split("[")[0] / "chain_log.json"
+                   if any(a <= frames[i] <= b for a, b in stair_ranges(paths))]
+    chain_path = paths.bench / tag.split("[")[0] / "chain_log.json"
     chain = json.loads(chain_path.read_text()) if chain_path.exists() else []
     # chain_log の "scale" は連結ログではスカラー、posegraph では [min,max] リスト
     scales = []
@@ -129,20 +122,17 @@ def evaluate(tag, gt, frame_range=None):
     ax.set_title(f"{tag}: ATE median {res['ate_median_m']}m / "
                  f"p90 {res['ate_p90_m']}m")
     ax.legend()
-    fig.savefig(BENCH_DIR / f"compare_{tag}.png", dpi=110, bbox_inches="tight")
+    fig.savefig(paths.bench / f"compare_{tag}.png", dpi=110, bbox_inches="tight")
     plt.close(fig)
     return res
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--tags", nargs="+", required=True)
-    args = ap.parse_args()
-    gt = load_gt()
-    results = [evaluate(t, gt) for t in args.tags]
-    (BENCH_DIR / "compare.json").write_text(json.dumps(results, indent=1))
-    print(f"-> {BENCH_DIR / 'compare.json'}")
+    args = ap.parse_args(argv)
+    gt = load_gt(paths)
+    results = [evaluate(paths, t, gt) for t in args.tags]
+    (paths.bench / "compare.json").write_text(json.dumps(results, indent=1))
+    print(f"-> {paths.bench / 'compare.json'}")
 
-
-if __name__ == "__main__":
-    main()

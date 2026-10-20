@@ -15,20 +15,16 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from recon3d.config import BENCH_DIR
 from recon3d.eval.gt_traj import mm_per_px
 from recon3d.core.io_ply import read_ply_xyzrgb
 from recon3d.postproc.plan_icp import wall_segments_px
 
-from recon3d.config import SESSION
 
-OUT_DIR = BENCH_DIR.parent / "backend"
-SFX = "" if SESSION == "0828" else f"_{SESSION}"   # セッション別の入出力名
 VIEWER_MAX_PTS = 550_000
 FLOOR_SPLIT_M = 2.5   # これ未満=1F表示 / 以上=2F表示 (2F床は+2.9m)
 
 
-def render_check(xyz, rgb, sfx=SFX):
+def render_check(paths, xyz, rgb, sfx=""):
     fig, axes = plt.subplots(1, 2, figsize=(20, 11))
     for ax, floor, (h0, h1) in ((axes[0], "1F", (-0.3, FLOOR_SPLIT_M)),
                                 (axes[1], "2F", (FLOOR_SPLIT_M, 6.0))):
@@ -36,7 +32,7 @@ def render_check(xyz, rgb, sfx=SFX):
         p = xyz[m][::2]
         c = rgb[m][::2] / 255.0
         ax.scatter(p[:, 0], p[:, 1], s=0.3, c=c, linewidths=0)
-        segs = wall_segments_px(floor) * mm_per_px() / 1000
+        segs = wall_segments_px(paths, floor) * mm_per_px(paths) / 1000
         for x1, y1, x2, y2 in segs:
             ax.plot([x1, x2], [y1, y2], "-", color="cyan", lw=1.5, alpha=0.9)
         ax.set_aspect("equal")
@@ -44,13 +40,13 @@ def render_check(xyz, rgb, sfx=SFX):
         ax.set_title(f"{floor} top view  (cyan = GT wall centerlines)")
         ax.set_facecolor("#101014")
     fig.tight_layout()
-    fig.savefig(OUT_DIR / f"aligned_house_check{sfx}.png", dpi=110,
+    fig.savefig(paths.backend / f"aligned_house_check{sfx}.png", dpi=110,
                 facecolor="#181820")
     plt.close(fig)
-    print(f"-> {OUT_DIR / f'aligned_house_check{sfx}.png'}")
+    print(f"-> {paths.backend / f'aligned_house_check{sfx}.png'}")
 
 
-def build_viewer(xyz, rgb, sfx=SFX):
+def build_viewer(paths, xyz, rgb, sfx=""):
     if len(xyz) > VIEWER_MAX_PTS:
         step = len(xyz) // VIEWER_MAX_PTS + 1
         xyz, rgb = xyz[::step], rgb[::step]
@@ -64,20 +60,12 @@ def build_viewer(xyz, rgb, sfx=SFX):
     html = tpl.replace(
         "/*DATA*/", f"const META={json.dumps(meta)};\nconst B64=\"{b64}\";")
     html = html.replace("508k", f"{len(xyz) // 1000}k")
-    (OUT_DIR / f"viewer{sfx}.html").write_text(html)
-    print(f"-> {OUT_DIR / f'viewer{sfx}.html'} ({len(xyz):,} pts)")
+    (paths.backend / f"viewer{sfx}.html").write_text(html)
+    print(f"-> {paths.backend / f'viewer{sfx}.html'} ({len(xyz):,} pts)")
 
 
-def main(sfx=SFX):
-    xyz, rgb = read_ply_xyzrgb(OUT_DIR / f"aligned_house{sfx}.ply")
-    render_check(xyz, rgb, sfx)
-    build_viewer(xyz, rgb, sfx)
+def main(paths, sfx=""):
+    xyz, rgb = read_ply_xyzrgb(paths.backend / f"aligned_house{sfx}.ply")
+    render_check(paths, xyz, rgb, sfx)
+    build_viewer(paths, xyz, rgb, sfx)
 
-
-if __name__ == "__main__":
-    import argparse
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--sfx", default=SFX,
-                    help="入出力接尾辞 (aligned_house<sfx>.ply → viewer<sfx>.html)")
-    args = ap.parse_args()
-    main(args.sfx)

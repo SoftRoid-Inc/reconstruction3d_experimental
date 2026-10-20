@@ -22,7 +22,6 @@ import sys
 
 import numpy as np
 
-from recon3d.config import IMU_DIR
 from recon3d.imu.timeline import frame_times, n_frames
 
 IMU_TRAJ = "/polish-pipeline/submodules/imu_experiments_code"
@@ -35,7 +34,7 @@ def _imu_traj():
     return detect_floor_transitions
 
 
-def detect(out_name="transitions.json", **kw):
+def detect(paths, out_name="transitions.json", **kw):
     """imu_raw.npz → transitions.json。kwはdetect_floor_transitionsへ透過
 
     offset_sec は imu_traj 既定の-5.0でなく 0.0 を使う (教師ラベル遅れ補正は
@@ -44,28 +43,29 @@ def detect(out_name="transitions.json", **kw):
     見逃しは core/stair_check の幾何検算が引き受ける。
     """
     kw.setdefault("offset_sec", 0.0)
-    raw = np.load(IMU_DIR / "imu_raw.npz")
-    conv = IMU_DIR / "imu_raw_traj.npz"      # imu_trajスキーマへ変換
+    raw = np.load(paths.imu / "imu_raw.npz")
+    conv = paths.imu / "imu_raw_traj.npz"      # imu_trajスキーマへ変換
     np.savez_compressed(conv, t=raw["t"], gyr=raw["gyro"], acc=raw["accel"],
                         scaled_from_g=np.array(False))
-    n = n_frames()
-    t, src = frame_times(n)
+    n = n_frames(paths)
+    t, src = frame_times(paths, n)
     kw.setdefault("frame_times", t)
     kw.setdefault("n_frames", n)
     kw.setdefault("frame_dt", float(np.median(np.diff(t))))
     print(f"[transitions] frame times: {src} (n={n}, "
           f"median dt={kw['frame_dt']:.4f}s)")
-    res = _imu_traj()(imu_npz=conv, out_json=IMU_DIR / out_name, **kw)
+    res = _imu_traj()(imu_npz=conv, out_json=paths.imu / out_name, **kw)
     for e in res["events"]:
         print(f"  {e['direction']:4s} frames {e['frame_start']:4.0f}-"
               f"{e['frame_end']:4.0f}  conf {e.get('confidence', 0):.2f}")
     return res
 
 
-if __name__ == "__main__":
+
+def main(paths, argv=None):
+    """IMUから階移動を検出して transitions.json に保存する"""
     import argparse
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--min-event-sec", type=float, default=3.0)
-    ap.add_argument("--offset-sec", type=float, default=0.0)
-    args = ap.parse_args()
-    detect(min_event_sec=args.min_event_sec, offset_sec=args.offset_sec)
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--out", default="transitions.json")
+    args = ap.parse_args(argv)
+    detect(paths, out_name=args.out)

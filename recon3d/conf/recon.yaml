@@ -1,28 +1,26 @@
 # 外部入力ディレクトリからパイプラインを回す設定 (hydra)
 #
-#   python -m img_align.tools.recon run input=/data/reconstruction
-#   python -m img_align.tools.recon run input=/data/reconstruction \
+#   python main.py run input=/data/reconstruction
+#   python main.py run input=/data/reconstruction \
 #       'steps=[anchor,export]' chunking.chunk_size=24
-#   python -m img_align.tools.recon inspect input=/data/reconstruction
+#   python main.py inspect input=/data/reconstruction
 #
 # 期待する入力の構成 (外部パイプラインが用意する):
 #   <input>/images/   frame_number_*.jpg          必須
 #          /masks/    frame_number_*.jpg          人物マスク (白=有効)
 #          /imu/      transitions.json idle_spans.json   IMU派生物
 #          /floors/   1F.json 1F.jpg … meta.json  間取り図ラベル
-#          /results/<session>/                    出力 (ここだけ書く)
+#          /results/                              出力 (ここだけ書く)
 #
 # floors/meta.json には**図面の実寸**を書く。壁注釈だけでは px→m が
 # 決まらず図面アンカーは動かない:
 #   {"known_width_mm": {"1F": 13877.5, "2F": 13877.5, "3F": 11375.0}}
 
-# 入力ディレクトリ (必須)
+# 入力ディレクトリ (必須)。これがデータセットそのもの
 input: null
-# 出力の分け目。null なら入力ディレクトリ名
-session: null
 
 # 走らせる段。前提は自動で補われる (anchor -> prep, chains も走る)。
-# 一覧は `python -m img_align.tools.recon steps`
+# 一覧は `python main.py steps`
 steps: [prep, chains, anchor, export]
 
 # 島区間ソース: imu=IMU階段検出(本番・GTフリー) / gt=GT軌跡CSV(開発)

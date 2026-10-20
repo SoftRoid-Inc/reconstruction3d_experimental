@@ -22,19 +22,18 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+from recon3d.constants import CAM_HEIGHT_M, PKG_DIR
 from PIL import Image
 
 from recon3d.postproc.plan_match import match_floor
-from recon3d.config import BENCH_DIR
 from recon3d.core.geometry import rotation_to_y
 from recon3d.postproc.density_map import slab_peaks
 from recon3d.eval.gt_traj import mm_per_px, load_gt
-from recon3d.core.plan_grid import ZUMEN_DIR, PlanGrid
+from recon3d.core.plan_grid import PlanGrid
 from recon3d.core.io_ply import read_ply_xyzrgb
 from recon3d.postproc.plan_icp import cells_to_px, icp_to_walls, segs_to_cells, similarity_from_grid, transform_pts, wall_segments_px
 
-from recon3d.config import (CAM_HEIGHT_M, CFG, OUT_DIR, SESSION,
-                              STAIR_ASCEND, STAIR_DESCEND)
 
 CELL_M = 0.05
 Y_BIN_M = 0.20
@@ -62,13 +61,13 @@ UNTRUSTED_JSON = ""
 
 
 
-def prepare_island(tag, mpu=None):
+def prepare_island(paths, tag, mpu=None):
     """連結島 → 重力整列・z反転・スケール推定・密度v2 (照合入力の辞書を返す)
 
     mpu指定時はスケール推定(カメラ高さ仮定)をスキップして固定する
     (メトリック出力のフロントエンド: MapAnything条件付け等は mpu=1.0)。"""
-    d = np.load(BENCH_DIR / tag / "global_cameras.npz")
-    xyz, _ = read_ply_xyzrgb(BENCH_DIR / tag / "global_points.ply")
+    d = np.load(paths.bench / tag / "global_cameras.npz")
+    xyz, _ = read_ply_xyzrgb(paths.bench / tag / "global_points.ply")
     names = [str(n) for n in d["names"]]
     ups = d["poses"][:, :3, 1]
     up = np.median(ups / np.linalg.norm(ups, axis=1, keepdims=True), axis=0)
@@ -139,10 +138,10 @@ def prepare_island(tag, mpu=None):
             "density_pts": w, **extras}
 
 
-def island_map_yaw(tag):
+def island_map_yaw(paths, tag):
     """島のカメラ群の密度(row,col)系ヨー中央値 (島間の相対ヨー導出用)"""
     from recon3d.core.chaining import med_yaw
-    d = np.load(BENCH_DIR / tag / "global_cameras.npz")
+    d = np.load(paths.bench / tag / "global_cameras.npz")
     med, _ = med_yaw(d["poses"][:, :3, :3])
     return med
 
@@ -161,7 +160,7 @@ def _match_relaxed(grid, density, cam_rc, **kw):
     return None
 
 
-def anchor_island(tag, floor, gt, ref=None,
+def anchor_island(paths, tag, floor, gt, ref=None,
                   anchored_so_far=None, allow_mirror=True, thetas=None,
                   scales=None, mpu=None):
     """島を図面へ: グリッド照合 → ICP精密化 → フレームpx辞書
@@ -171,8 +170,8 @@ def anchor_island(tag, floor, gt, ref=None,
     相対ヨーの±2分岐は、anchored_so_far(既知のフレーム→px)との時系列連続性
     (島の端フレームが直前の既知位置の近くにあるはず)で選ぶ。
     """
-    d = prepare_island(tag, mpu=mpu)
-    grid = PlanGrid(floor)
+    d = prepare_island(paths, tag, mpu=mpu)
+    grid = PlanGrid(paths, floor)
     cam_rc = np.stack(
         [(d["cam_pos_aligned"][:, 2] - d["origin"][1]) / d["cell_units"],
          (d["cam_pos_aligned"][:, 0] - d["origin"][0]) / d["cell_units"]], axis=1)
@@ -185,7 +184,7 @@ def anchor_island(tag, floor, gt, ref=None,
             kw["scales"] = scales
         best = _match_relaxed(grid, d["density"], cam_rc, **kw)
     else:
-        dpsi = math.degrees(ref["psi"] - island_map_yaw(tag))
+        dpsi = math.degrees(ref["psi"] - island_map_yaw(paths, tag))
         scales = np.geomspace(0.5, 1.5, 18)
         branches = []
         # sgn=0: PanoVGGTは先頭フレーム基準の座標系のため、方位ロック下では
@@ -215,7 +214,7 @@ def anchor_island(tag, floor, gt, ref=None,
                 px = cells_to_px(transform_pts(cam_rc[j][None], s0, th0, t0),
                                  grid)[0]
                 dist_m = math.dist(px, anchored_so_far[k_near]) \
-                    * mm_per_px() / 1000
+                    * mm_per_px(paths) / 1000
                 print(f"  branch theta={b['theta']} score={b['score']:.3f} "
                       f"continuity {dist_m:.2f}m (frame {frames[j]} vs "
                       f"{k_near})")
@@ -240,13 +239,13 @@ def anchor_island(tag, floor, gt, ref=None,
     pts = np.stack([zz, xx], axis=1).astype(np.float64)
     if len(pts) > 20000:
         pts = pts[:: len(pts) // 20000 + 1]
-    segs = segs_to_cells(wall_segments_px(floor), grid)
+    segs = segs_to_cells(wall_segments_px(paths, floor), grid)
     s2, th2, t2, resid = icp_to_walls(pts, segs, s, th, t)
     print(f"{tag} ICP: wall resid {resid:.3f}m")
     px = cells_to_px(transform_pts(cam_rc, s2, th2, t2), grid)
     # 点群書き出し用にアンカー変換を保存
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    (OUT_DIR / f"anchor_{tag}.json").write_text(json.dumps({
+    paths.backend.mkdir(parents=True, exist_ok=True)
+    (paths.backend / f"anchor_{tag}.json").write_text(json.dumps({
         "tag": tag, "floor": floor,
         "R_align": d["R_align"].tolist(),
         "floor_y_units": d["floor_y_units"],
@@ -257,22 +256,28 @@ def anchor_island(tag, floor, gt, ref=None,
         "mirror_col": mirror_col,
         "s": s2, "th": th2, "t": list(map(float, t2)),
         "wall_resid_m": resid}, indent=1))
-    info = {"th_deg": math.degrees(th2) % 360, "psi": island_map_yaw(tag)}
+    info = {"th_deg": math.degrees(th2) % 360, "psi": island_map_yaw(paths, tag)}
     return {f"frame_{n}".replace("frame_frame_", "frame_"): p
             for n, p in zip(d["names"], px)}, resid, info
 
 
-def assemble_and_eval(anchored, floors, gt, label=""):
+def _stair_frames(paths):
+    """階段区間のフレーム集合 (IMU検出。無ければ空)"""
+    from recon3d.core.stair_check import imu_stair_ranges
+    return {f for a, b in imu_stair_ranges(paths) for f in range(a, b + 1)}
+
+
+def assemble_and_eval(paths, anchored, floors, gt, label=""):
     """全編組み立て(ギャップ補間)→GT評価→軌跡図。labelは出力ファイルの接尾辞"""
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    paths.backend.mkdir(parents=True, exist_ok=True)
     # ギャップ補間用のIMU PDR軌跡 — 既定OFF (実測でbridge誤差1.9→3.3mに悪化。
     # 階段の歩みは水平ストライドでないためPDRが階段区間でオーバーシュートする)
     import os
     pdr = None
-    pdr_path = OUT_DIR.parent / "imu" / "pdr.npz"
+    pdr_path = paths.backend.parent / "imu" / "pdr.npz"
     if os.environ.get("USE_PDR_BRIDGE") and pdr_path.exists():
         z = np.load(pdr_path)
-        pdr = (z["frames"], z["pos"] * 1000 / mm_per_px())  # m→図面px
+        pdr = (z["frames"], z["pos"] * 1000 / mm_per_px(paths))  # m→図面px
 
     def pdr_at(f):
         fr, pos = pdr
@@ -296,7 +301,7 @@ def assemble_and_eval(anchored, floors, gt, label=""):
         return a * (1 - w) + b * w
 
     # 全編組み立て: 島区間はICP解、ギャップはPDR相似フィット補間
-    all_frames = list(CFG["frames"])
+    all_frames = list(range(paths.n_frames))
     known = sorted(anchored)
     track = []
     for f in all_frames:
@@ -313,22 +318,18 @@ def assemble_and_eval(anchored, floors, gt, label=""):
             else:
                 x, y = bridge_pos(f, lo, hi)
             src = "bridge"
-            # 階割当はIMU階段タイムライン
-            if f < STAIR_ASCEND[0] + (STAIR_ASCEND[1] - STAIR_ASCEND[0]) / 2:
-                floor = "1F" if f < STAIR_ASCEND[0] else "1F"
-            if f < (STAIR_ASCEND[0] + STAIR_ASCEND[1]) / 2:
-                floor = "1F"
-            elif f < (STAIR_DESCEND[0] + STAIR_DESCEND[1]) / 2:
-                floor = "2F"
-            else:
-                floor = "1F"
+            # 補間フレームの階は**最も近いアンカー済みフレームから継ぐ**。
+            # かつては SESSION_CFG の階段区間から 1F→2F→1F を決め打ちして
+            # いたが、2階建て固定の前提で、階数の違う物件では誤った階を振る
+            near = min(known, key=lambda k: abs(k - f))
+            floor = floors[near]
         track.append({"frame": f, "floor": floor, "x_px": round(x, 1),
                       "y_px": round(y, 1), "source": src})
 
-    # 評価 (階段内外を分ける)
-    stair_set = set()
-    for a, b in (STAIR_ASCEND, STAIR_DESCEND):
-        stair_set.update(range(a - 6, b + 7))
+    # 評価 (階段内外を分ける)。かつては SESSION_CFG の手動注釈
+    # (STAIR_ASCEND/DESCEND) を使っていたが、セッションレジストリを廃したので
+    # IMU の階段検出 (imu/transitions.json) から取る。本番の島分割と同じ出どころ
+    stair_set = _stair_frames(paths)
     rows = {"island": [], "bridge": [], "stair": []}
     floor_ok = 0
     n_eval = 0
@@ -338,7 +339,7 @@ def assemble_and_eval(anchored, floors, gt, label=""):
             continue
         n_eval += 1
         e = math.dist((tkr["x_px"], tkr["y_px"]),
-                      (gt[g]["x_px"], gt[g]["y_px"])) * mm_per_px() / 1000
+                      (gt[g]["x_px"], gt[g]["y_px"])) * mm_per_px(paths) / 1000
         if tkr["floor"] == gt[g]["floor"]:
             floor_ok += 1
         key = ("stair" if tkr["frame"] in stair_set
@@ -350,12 +351,12 @@ def assemble_and_eval(anchored, floors, gt, label=""):
             summary[k] = {"n": len(v), "median_m": round(float(np.median(v)), 3),
                           "p90_m": round(float(np.percentile(v, 90)), 3)}
     print(json.dumps(summary, indent=1))
-    (OUT_DIR / f"trajectory{label}.json").write_text(json.dumps(
+    (paths.backend / f"trajectory{label}.json").write_text(json.dumps(
         {"summary": summary, "track": track}, indent=1))
 
     # 軌跡図
     for floor in ("1F", "2F"):
-        bg = np.asarray(Image.open(ZUMEN_DIR / f"{floor}.jpg").convert("L"))
+        bg = np.asarray(Image.open(paths.floors / f"{floor}.jpg").convert("L"))
         fig, ax = plt.subplots(figsize=(11, 8))
         ax.imshow(bg, cmap="gray")
         g = [(f, v) for f, v in sorted(gt.items()) if v["floor"] == floor]
@@ -370,14 +371,14 @@ def assemble_and_eval(anchored, floors, gt, label=""):
         ax.legend()
         ax.set_title(f"{floor}: backend trajectory")
         ax.set_axis_off()
-        fig.savefig(OUT_DIR / f"trajectory{label}_{floor}.jpg", dpi=120,
+        fig.savefig(paths.backend / f"trajectory{label}_{floor}.jpg", dpi=120,
                     bbox_inches="tight")
         plt.close(fig)
-    print(f"-> {OUT_DIR}")
+    print(f"-> {paths.backend}")
     return summary
 
 
-def main():
+def main(paths, argv=None):
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--islands", nargs="*", default=None,
@@ -393,7 +394,6 @@ def main():
     if args.exclude:
         from pathlib import Path
 
-        from recon3d.config import PKG_DIR
         p = Path(args.exclude)
         if not p.is_absolute():
             p = PKG_DIR / p
@@ -402,12 +402,12 @@ def main():
                        for n in json.loads(p.read_text())}
             print(f"exclude (pose untrusted): {sorted(exclude)}")
 
-    gt = load_gt()
+    gt = load_gt(paths)
     anchored = {}
     floors = {}
     ref_by_floor = {}   # 同フロアの最初(=最大)の島の解を後続の小島の拘束に使う
     for tag, floor in islands:
-        px_map, _, info = anchor_island(tag, floor, gt,
+        px_map, _, info = anchor_island(paths, tag, floor, gt,
                                         ref=ref_by_floor.get(floor),
                                         anchored_so_far=dict(anchored))
         ref_by_floor.setdefault(floor, info)
@@ -417,8 +417,5 @@ def main():
                 continue
             anchored[fr] = (float(p[0]), float(p[1]))
             floors[fr] = floor
-    assemble_and_eval(anchored, floors, gt, label=args.label)
+    assemble_and_eval(paths, anchored, floors, gt, label=args.label)
 
-
-if __name__ == "__main__":
-    main()

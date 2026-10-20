@@ -35,7 +35,6 @@ import numpy as np
 from scipy.optimize import least_squares
 from scipy.spatial import cKDTree
 
-from recon3d.config import BENCH_DIR, RESULTS_DIR
 from recon3d.core.chaining import load_chunk, trimmed_icp_sim3
 from recon3d.core.geometry import rot_y, rotation_to_y, sim3_umeyama
 from recon3d.core.io_ply import read_ply_xyzrgb, write_ply
@@ -209,7 +208,7 @@ def solve(meta, edges, yaw_w=YAW_W):
     return unpack(sol.x), r1
 
 
-def run(cdirs, tag, yaw_w=YAW_W, loops=True):
+def run(paths, cdirs, tag, yaw_w=YAW_W, loops=True):
     chunks = [load_chunk(c) for c in cdirs]
     meta = prepare(chunks)
     edges = seq_edges(meta)
@@ -242,7 +241,7 @@ def run(cdirs, tag, yaw_w=YAW_W, loops=True):
         all_rgb.append(rgb[::PLY_STRIDE])
 
     names = sorted(frame_pos)
-    out = BENCH_DIR / tag
+    out = paths.bench / tag
     out.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         out / "global_cameras.npz", names=np.array(names),
@@ -260,7 +259,7 @@ def run(cdirs, tag, yaw_w=YAW_W, loops=True):
     return out
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag")
     ap.add_argument("--chunks", nargs="*", type=int)
@@ -274,16 +273,13 @@ def main():
     ap.add_argument("--yaw-w", type=float, default=YAW_W)
     ap.add_argument("--no-loops", action="store_true",
                     help="ループ閉合なし (逐次のみ=従来相当の対照実験)")
-    args = ap.parse_args()
-    pcd = RESULTS_DIR / "pcd" / args.chunks_dir
+    args = ap.parse_args(argv)
+    pcd = paths.results / "pcd" / args.chunks_dir
     ks = args.chunks
     if args.from_tag:
-        man = json.loads((BENCH_DIR / args.manifest).read_text())
+        man = json.loads((paths.bench / args.manifest).read_text())
         ks = next(m["chunks"] for m in man if m["tag"] == args.from_tag)
     cdirs = [pcd / f"chunk_{k:02d}" for k in ks]
     tag = args.tag or (f"pg_{args.from_tag}" if args.from_tag else "pg_test")
-    run(cdirs, tag, args.yaw_w, loops=not args.no_loops)
+    run(paths, cdirs, tag, args.yaw_w, loops=not args.no_loops)
 
-
-if __name__ == "__main__":
-    main()

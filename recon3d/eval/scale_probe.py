@@ -24,8 +24,6 @@ import json
 
 import numpy as np
 
-from recon3d.config import (BENCH_DIR, CAM_HEIGHT_M, FRAMES_DIR,
-                              RESULTS_DIR, frame_name)
 from recon3d.core.geometry import rotation_to_y
 from recon3d.core.io_ply import read_ply_xyzrgb
 
@@ -68,14 +66,14 @@ def chunk_geom(cdir):
     }
 
 
-def chunk_appearance(cdir):
+def chunk_appearance(paths, cdir):
     """チャンクの外観特徴 (入力フレームから)"""
     from PIL import Image
     names = [str(n) for n in np.load(cdir / "cameras.npz")["names"]]
     diffs, edges = [], []
     prev = None
     for n in names:
-        p = FRAMES_DIR / frame_name(int(n.replace("frame_", "")))
+        p = paths.images / paths.frame_name(int(n.replace("frame_", "")))
         if not p.exists():
             continue
         a = np.asarray(Image.open(p).convert("L")
@@ -88,12 +86,12 @@ def chunk_appearance(cdir):
             "edge_var": float(np.median(edges)) if edges else np.nan}
 
 
-def collect(chunks_dir="chunks", manifest="pv_manifest.json", appearance=True):
+def collect(paths, chunks_dir="chunks", manifest="pv_manifest.json", appearance=True):
     """島の chain_log から |log s| を取り、該当チャンクの特徴を集める"""
-    pcd = RESULTS_DIR / "pcd" / chunks_dir
+    pcd = paths.results / "pcd" / chunks_dir
     rows = []
-    for m in json.loads((BENCH_DIR / manifest).read_text()):
-        p = BENCH_DIR / m["tag"] / "chain_log.json"
+    for m in json.loads((paths.bench / manifest).read_text()):
+        p = paths.bench / m["tag"] / "chain_log.json"
         if not p.exists():
             continue
         for c in json.loads(p.read_text()):
@@ -106,20 +104,20 @@ def collect(chunks_dir="chunks", manifest="pv_manifest.json", appearance=True):
                  "abs_log_s": abs(float(np.log(c["scale"]))),
                  "icp_resid": c.get("icp_resid"), **chunk_geom(cdir)}
             if appearance:
-                r.update(chunk_appearance(cdir))
+                r.update(chunk_appearance(paths, cdir))
             rows.append(r)
             print(f"  {m['tag']:16} chunk{k:3d} |log s|={r['abs_log_s']:.3f} "
                   f"trans={r['translation']:.3f}", flush=True)
     return rows
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--chunks-dir", default="chunks")
     ap.add_argument("--manifest", default="pv_manifest.json")
     ap.add_argument("--no-appearance", action="store_true")
-    args = ap.parse_args()
-    rows = collect(args.chunks_dir, args.manifest, not args.no_appearance)
+    args = ap.parse_args(argv)
+    rows = collect(paths, args.chunks_dir, args.manifest, not args.no_appearance)
     if len(rows) < 8:
         raise SystemExit(f"サンプルが{len(rows)}本しかありません")
     y = np.array([r["abs_log_s"] for r in rows])
@@ -136,11 +134,8 @@ def main():
             else float("nan")
     for f in sorted(cors, key=lambda f: -abs(cors[f] or 0)):
         print(f"{f:16} {cors[f]:+7.2f}")
-    (BENCH_DIR / "scale_probe.json").write_text(json.dumps(
+    (paths.bench / "scale_probe.json").write_text(json.dumps(
         {"n": len(rows), "median_abs_log_s": float(np.median(y)),
          "correlations": cors, "rows": rows}, indent=1, ensure_ascii=False))
-    print(f"-> {BENCH_DIR / 'scale_probe.json'}")
+    print(f"-> {paths.bench / 'scale_probe.json'}")
 
-
-if __name__ == "__main__":
-    main()

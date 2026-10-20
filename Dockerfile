@@ -38,12 +38,17 @@ RUN git clone https://github.com/YijingGuo-June/PanoVGGT /opt/panovggt \
 # 入っていて `XFORMERS_DISABLED` も未設定なので、推論は memory_efficient_attention
 # を通っていた。入れないと attention の実装が変わり、既存チャンクと
 # 数値が揃わなくなる (panovggt/layers/attention.py は try/except で黙って落ちる)
+# mapbox-earcut は trimesh の多角形三角形分割エンジン (plan2model build)。
+# 無いと trimesh は非FSFライセンスの `triangle` を勧めてくるが、商用可が
+# 必須なので ISC の earcut を入れる
 RUN pip install --no-cache-dir \
     xformers==0.0.28.post3 \
     huggingface_hub safetensors requests \
     opencv-python-headless einops omegaconf hydra-core yacs kornia \
     imageio plyfile trimesh shapely scikit-learn scipy matplotlib \
-    pillow tqdm typer
+    pillow tqdm typer \
+    mapbox-earcut \
+    pytest
 
 COPY recon3d /opt/recon3d/recon3d
 COPY main.py /opt/recon3d/main.py

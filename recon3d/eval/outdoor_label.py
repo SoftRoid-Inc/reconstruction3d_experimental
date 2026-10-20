@@ -22,15 +22,14 @@ from pathlib import Path
 
 import numpy as np
 
-from recon3d.config import BENCH_DIR, OUT_DIR, SESSION
 
 OC_RESULTS = Path("/mnt/data/programming/outdoor_classification/results")
 OUTDOOR_FRAC = 0.5     # 島のフレームのこの割合超が屋外なら島ごと除外
 
 
-def frame_labels(session=None):
+def frame_labels(paths, session=None):
     """{frame_idx: ("indoor"|"outdoor", p_outdoor)}。無ければ None"""
-    p = OC_RESULTS / (session or SESSION) / "prediction.jsonl"
+    p = OC_RESULTS / (session or paths.name) / "prediction.jsonl"
     if not p.exists():
         return None
     out = {}
@@ -42,15 +41,15 @@ def frame_labels(session=None):
     return out
 
 
-def island_outdoor(manifest="pv_manifest.json", session=None):
+def island_outdoor(paths, manifest="pv_manifest.json", session=None):
     """島ごとの屋外率 [{tag, n, frac, p_med, outdoor}]"""
-    lab = frame_labels(session)
+    lab = frame_labels(paths, session)
     if lab is None:
         return None
-    man = json.loads((BENCH_DIR / manifest).read_text())
+    man = json.loads((paths.bench / manifest).read_text())
     rows = []
     for m in man:
-        cam = BENCH_DIR / m["tag"] / "global_cameras.npz"
+        cam = paths.bench / m["tag"] / "global_cameras.npz"
         if cam.exists():     # チェーンに実在するフレームで数える
             fr = [int(str(n).replace("frame_", ""))
                   for n in np.load(cam)["names"]]
@@ -67,26 +66,23 @@ def island_outdoor(manifest="pv_manifest.json", session=None):
     return rows
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default="pv_manifest.json")
     ap.add_argument("--frac", type=float, default=OUTDOOR_FRAC)
-    args = ap.parse_args()
-    rows = island_outdoor(args.manifest)
+    args = ap.parse_args(argv)
+    rows = island_outdoor(paths, args.manifest)
     if rows is None:
-        print(f"{SESSION}: outdoor_classification の結果が無い "
-              f"({OC_RESULTS / SESSION})")
+        print(f"{paths.name}: outdoor_classification の結果が無い "
+              f"({OC_RESULTS / paths.name})")
         return
     print(f"{'island':20s} {'枚数':>5s} {'屋外率':>7s} {'p中央':>7s}  判定")
     for r in rows:
         r["outdoor"] = r["frac"] > args.frac
         print(f"{r['tag']:20s} {r['n']:5d} {r['frac']:7.1%} {r['p_med']:7.3f}"
               f"  {'屋外' if r['outdoor'] else '室内'}")
-    p = OUT_DIR / "outdoor_label.json"
+    p = paths.backend / "outdoor_label.json"
     p.write_text(json.dumps({"frac_threshold": args.frac, "islands": rows},
                             ensure_ascii=False, indent=1))
     print(f"-> {p}")
 
-
-if __name__ == "__main__":
-    main()

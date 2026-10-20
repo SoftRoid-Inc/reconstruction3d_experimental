@@ -30,16 +30,11 @@ from recon3d.plan2model.geometry import plan_to_boxes, rect_px_to_mm
 from recon3d.plan2model.loader import load_labelme
 from recon3d.plan2model.mesh import boxes_to_scene, footprint_polygon
 
-from recon3d.config import BENCH_DIR
-from recon3d.config import SESSION
 from recon3d.eval.gt_traj import mm_per_px
-from recon3d.core.plan_grid import ZUMEN_DIR
 from recon3d.core.io_ply import read_ply_xyzrgb
 from recon3d.postproc.plan_icp import wall_segments_px
 
-OUT_DIR = BENCH_DIR.parent / "backend"
 FLOORS = [("1F", 0.0), ("2F", 2.9)]
-PLY_NAME = {"0828": "aligned_house.ply", "0312": "aligned_house_0312.ply"}
 
 # 合成参照点 (export_aligned2 の壁カーテン) の色
 CURTAIN_COLORS = [(60, 90, 255), (90, 200, 255)]
@@ -63,10 +58,10 @@ MIN_PART_PTS = 120
 
 # ---------------------------------------------------------------- 構造層
 
-def build_structure_scene():
+def build_structure_scene(paths):
     """recon3d箱モデルを構築し、aligned座標系[m]へ変換したtrimesh.Sceneを返す"""
     cfg = ReconConfig()
-    plans = [load_labelme(ZUMEN_DIR / f"{f}.json", f) for f, _ in FLOORS]
+    plans = [load_labelme(paths.floors / f"{f}.json", f) for f, _ in FLOORS]
     mm_per_px = scale_mm_per_px(plans[0], cfg.known_width_mm)
     boxes, slabs = [], []
     for i, plan in enumerate(plans):
@@ -119,7 +114,7 @@ def structure_dist_raster(plan, mm_per_px):
     return lookup
 
 
-def extract_obstacles(xyz, rgb, plans, mm_per_px):
+def extract_obstacles(paths, xyz, rgb, plans, mm_per_px):
     """点群から非構造点を抽出し、クラスタごとの凸包メッシュ列を返す"""
     import open3d as o3d
     keep = np.ones(len(xyz), bool)
@@ -222,10 +217,10 @@ def poisson_visual(xyz, rgb, out_path):
 
 # ---------------------------------------------------------------- 検証画像
 
-def check_figure(structure, hulls, out_path):
+def check_figure(paths, structure, hulls, out_path):
     fig, axes = plt.subplots(1, 2, figsize=(20, 11))
     for ax, (floor, z_off) in zip(axes, FLOORS):
-        for x1, y1, x2, y2 in wall_segments_px(floor) * mm_per_px() / 1000:
+        for x1, y1, x2, y2 in wall_segments_px(paths, floor) * mm_per_px(paths) / 1000:
             ax.plot([x1, x2], [y1, y2], "-", color="cyan", lw=1.2)
         for name, g in structure.geometry.items():
             v = g.vertices
@@ -257,13 +252,21 @@ def check_figure(structure, hulls, out_path):
     print(f"-> {out_path}")
 
 
-def main():
-    sess = SESSION
-    xyz, rgb = read_ply_xyzrgb(OUT_DIR / PLY_NAME[sess])
-    print(f"session {sess}: {len(xyz):,} points")
+def main(paths, argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--ply", default=None,
+                    help="整列済み点群 (既定: backend/aligned_house_<名前>.ply)")
+    args = ap.parse_args(argv)
+    sess = paths.name
+    ply = paths.backend / (args.ply or f"aligned_house_{sess}.ply")
+    if not ply.exists():
+        raise SystemExit(f"整列済み点群が無い: {ply} (先に export を回すこと)")
+    xyz, rgb = read_ply_xyzrgb(ply)
+    print(f"{sess}: {len(xyz):,} points ({ply.name})")
 
-    structure, plans, mm_per_px = build_structure_scene()
-    hulls, _ = extract_obstacles(xyz, rgb, plans, mm_per_px)
+    structure, plans, mm_per_px = build_structure_scene(paths)
+    hulls, _ = extract_obstacles(paths, xyz, rgb, plans, mm_per_px)
 
     scene = trimesh.Scene()
     for name, g in structure.geometry.items():
@@ -271,7 +274,7 @@ def main():
     for i, (hull, _) in enumerate(hulls):
         scene.add_geometry(hull, geom_name=f"obstacle_{i:03d}")
     for ext in ("glb", "obj"):
-        path = OUT_DIR / f"collision_{sess}.{ext}"
+        path = paths.backend / f"collision_{sess}.{ext}"
         scene.export(path)
         print(f"-> {path}")
     stats = {
@@ -281,12 +284,9 @@ def main():
         "obstacle_faces": int(sum(len(h.faces) for h, _ in hulls)),
         "obstacle_volume_m3": round(float(sum(h.volume for h, _ in hulls)), 2),
     }
-    (OUT_DIR / f"collision_{sess}.json").write_text(json.dumps(stats, indent=1))
+    (paths.backend / f"collision_{sess}.json").write_text(json.dumps(stats, indent=1))
     print(json.dumps(stats))
 
-    check_figure(structure, hulls, OUT_DIR / f"collision_check_{sess}.png")
-    poisson_visual(xyz, rgb, OUT_DIR / f"mesh_visual_{sess}.ply")
+    check_figure(paths, structure, hulls, paths.backend / f"collision_check_{sess}.png")
+    poisson_visual(xyz, rgb, paths.backend / f"mesh_visual_{sess}.ply")
 
-
-if __name__ == "__main__":
-    main()

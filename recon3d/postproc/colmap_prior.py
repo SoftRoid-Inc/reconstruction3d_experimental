@@ -19,10 +19,8 @@ from pathlib import Path
 
 import numpy as np
 
-from recon3d.config import BENCH_DIR
 from recon3d.core.chaining import load_chunk
 from recon3d.core.geometry import sim3_umeyama, apply
-from recon3d.config import RESULTS_DIR
 from recon3d.core.io_ply import read_ply_xyzrgb
 
 
@@ -89,7 +87,7 @@ def fit_chunk_to_colmap(names, positions, centers, trim=0.2):
     return T, float(np.median(r)), len(m)
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, help="COLMAP sparseモデル dir")
     ap.add_argument("--chunks-root", required=True)
@@ -106,7 +104,7 @@ def main():
     print(f"COLMAP registered frames: {len(centers)}")
     root = Path(args.chunks_root)
     if not root.is_absolute():
-        root = RESULTS_DIR / args.chunks_root
+        root = paths.results / args.chunks_root
     cdirs_all = sorted(root.glob("chunk_*"), key=lambda p: int(p.name.split("_")[1]))  # 数値ソート (chunk_100問題)
 
     # 'name:a:b' の繰り返し。同名は結合 (共有ゲージなので離れたレンジも1島にできる)
@@ -141,7 +139,7 @@ def main():
                 frame_pose.setdefault(n, []).append(g)
                 frame_scale.setdefault(n, []).append(s)
 
-        out = BENCH_DIR / f"{args.tag_prefix}{name}"
+        out = paths.bench / f"{args.tag_prefix}{name}"
         out.mkdir(parents=True, exist_ok=True)
         fnames = sorted(frame_pos)
         positions = np.stack([np.mean(frame_pos[n], axis=0) for n in fnames])
@@ -191,6 +189,3 @@ def main():
               "metric_rescale": bool(args.metric_rescale)}], indent=1))
         print(f"-> {out} ({len(fnames)} frames)")
 
-
-if __name__ == "__main__":
-    main()

@@ -23,7 +23,6 @@ import math
 import numpy as np
 from PIL import Image
 
-from recon3d.config import BENCH_DIR, OUT_DIR, PROP, SESSION
 from recon3d.eval.gt_traj import mm_per_px, load_gt
 
 PAD_PX = 180
@@ -32,8 +31,8 @@ LABEL_COLOR = {"wall": "#1f77b4", "column": "#9467bd",
 BAD_COLORS = ("#d62728", "#e377c2", "#ff7f0e", "#8c564b", "#e31a1c")
 
 
-def load_track(tag):
-    p = OUT_DIR / f"corner_anchor_{tag}.json"
+def load_track(paths, tag):
+    p = paths.backend / f"corner_anchor_{tag}.json"
     if not p.exists():
         return None
     d = json.loads(p.read_text())
@@ -41,15 +40,15 @@ def load_track(tag):
     return fr, np.array([d[f"frame_{f:06d}"] for f in fr])
 
 
-def gt_err(fr, xy, gt):
+def gt_err(paths, fr, xy, gt):
     e = [math.dist(p, (gt[f]["x_px"], gt[f]["y_px"]))
          for f, p in zip(fr, xy) if f in gt]
-    return float(np.median(e)) * mm_per_px() / 1000 if len(e) >= 4 else None
+    return float(np.median(e)) * mm_per_px(paths) / 1000 if len(e) >= 4 else None
 
 
-def plan_shapes(floor):
+def plan_shapes(paths, floor):
     """labelme のラベル矩形 → {label: [(x1,y1,x2,y2)]}"""
-    p = PROP.zumen_dir / f"{floor}.json"
+    p = paths.floors / f"{floor}.json"
     if not p.exists():
         return {}
     out = {}
@@ -60,11 +59,11 @@ def plan_shapes(floor):
     return out
 
 
-def draw_labels(ax, floor, lw=1.6, alpha=0.9):
+def draw_labels(paths, ax, floor, lw=1.6, alpha=0.9):
     """ラベルマップ (wall/column/door/window) を描く"""
     from matplotlib.patches import Rectangle
     shown = set()
-    for lab, rects in plan_shapes(floor).items():
+    for lab, rects in plan_shapes(paths, floor).items():
         c = LABEL_COLOR.get(lab, "#333333")
         for x1, y1, x2, y2 in rects:
             ax.add_patch(Rectangle((x1, y1), x2 - x1, y2 - y1, fill=False,
@@ -73,54 +72,54 @@ def draw_labels(ax, floor, lw=1.6, alpha=0.9):
             shown.add(lab)
 
 
-def island_density_px(tag, floor):
+def island_density_px(paths, tag, floor):
     """島の壁密度セルを、アンカー変換で図面ピクセルへ落とす"""
     from recon3d.core.plan_grid import PlanGrid
     from recon3d.postproc.anchor import prepare_island
     from recon3d.postproc.corners import DENS_THR
     from recon3d.postproc.plan_icp import cells_to_px, transform_pts
-    a = OUT_DIR / f"anchor_{tag}_corners.json"
+    a = paths.backend / f"anchor_{tag}_corners.json"
     if not a.exists():
         return None
     an = json.loads(a.read_text())
-    d = prepare_island(tag, mpu=an["m_per_unit"])
+    d = prepare_island(paths, tag, mpu=an["m_per_unit"])
     zz, xx = np.nonzero(d["density"] > DENS_THR)
     pts = np.stack([zz, xx], axis=1).astype(np.float64)
     pts = pts[:: max(1, len(pts) // 40000)]
     moved = transform_pts(pts, an["s"], an["th"], np.array(an["t"]))
-    return cells_to_px(moved, PlanGrid(floor))
+    return cells_to_px(moved, PlanGrid(paths, floor))
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default="pv_manifest.json")
     ap.add_argument("--err-m", type=float, default=1.0, help="これ超を失敗とする")
     ap.add_argument("--no-density", action="store_true")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     matplotlib.rcParams["font.family"] = ["Noto Sans CJK JP", "DejaVu Sans"]
 
-    gt = load_gt()
-    man = json.loads((BENCH_DIR / args.manifest).read_text())
+    gt = load_gt(paths)
+    man = json.loads((paths.bench / args.manifest).read_text())
     by_floor = {}
     for m in man:
         if not m.get("floor"):
             continue
-        r = load_track(m["tag"])
+        r = load_track(paths, m["tag"])
         if r is None:
             continue
         fr, xy = r
         by_floor.setdefault(m["floor"], []).append(
-            {"tag": m["tag"], "fr": fr, "xy": xy, "err": gt_err(fr, xy, gt),
+            {"tag": m["tag"], "fr": fr, "xy": xy, "err": gt_err(paths, fr, xy, gt),
              "n": m["b"] - m["a"] + 1})
 
     for floor, isl in sorted(by_floor.items()):
-        bg = np.asarray(Image.open(PROP.zumen_dir / f"{floor}.jpg").convert("L"))
+        bg = np.asarray(Image.open(paths.floors / f"{floor}.jpg").convert("L"))
         fig, ax = plt.subplots(figsize=(13, 9))
         ax.imshow(bg, cmap="gray", vmin=0, vmax=255, alpha=0.30, zorder=0)
-        draw_labels(ax, floor, lw=1.2, alpha=0.55)
+        draw_labels(paths, ax, floor, lw=1.2, alpha=0.55)
         g = np.array([[v["x_px"], v["y_px"]] for _, v in sorted(gt.items())
                       if v["floor"] == floor])
         ax.plot(g[:, 0], g[:, 1], "-", color="k", lw=4.0, alpha=0.25,
@@ -144,9 +143,9 @@ def main():
                     max(0, allp[:, 1].min() - PAD_PX))
         ax.set_axis_off()
         ax.legend(fontsize=8, loc="upper right", framealpha=0.88, ncol=1)
-        ax.set_title(f"{SESSION} {floor} — アンカー結果 "
+        ax.set_title(f"{paths.name} {floor} — アンカー結果 "
                      f"(赤系=GT残差 {args.err_m}m超)  細線/青=成功", fontsize=11)
-        out = OUT_DIR / f"error_view_{floor}.png"
+        out = paths.backend / f"error_view_{floor}.png"
         fig.savefig(out, dpi=140, bbox_inches="tight")
         plt.close(fig)
         print(f"-> {out}  失敗{nbad}/{len(isl)}島")
@@ -156,12 +155,12 @@ def main():
         bad_isl = [i for i in isl
                    if i["err"] is not None and i["err"] > args.err_m]
         for i in bad_isl:
-            px = island_density_px(i["tag"], floor)
+            px = island_density_px(paths, i["tag"], floor)
             if px is None:
                 continue
             fig, ax = plt.subplots(figsize=(12, 8.5))
             ax.imshow(bg, cmap="gray", vmin=0, vmax=255, alpha=0.25, zorder=0)
-            draw_labels(ax, floor, lw=1.8, alpha=0.95)
+            draw_labels(paths, ax, floor, lw=1.8, alpha=0.95)
             ax.scatter(px[:, 0], px[:, 1], s=0.6, c="#d62728", alpha=0.45,
                        zorder=5, label="島の壁密度")
             ax.plot(i["xy"][:, 0], i["xy"][:, 1], "-", lw=1.6, color="#d62728",
@@ -175,14 +174,11 @@ def main():
                         max(0, p2[:, 1].min() - PAD_PX))
             ax.set_axis_off()
             ax.legend(fontsize=9, loc="upper right", framealpha=0.88)
-            ax.set_title(f"{SESSION} {i['tag']} ({floor}) — "
+            ax.set_title(f"{paths.name} {i['tag']} ({floor}) — "
                          f"密度 × ラベルマップ  GT残差 {i['err']:.2f}m",
                          fontsize=11)
-            out = OUT_DIR / f"error_density_{i['tag']}.png"
+            out = paths.backend / f"error_density_{i['tag']}.png"
             fig.savefig(out, dpi=140, bbox_inches="tight")
             plt.close(fig)
             print(f"-> {out}")
 
-
-if __name__ == "__main__":
-    main()

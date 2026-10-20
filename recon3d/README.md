@@ -14,7 +14,7 @@ reconstruction/
   masks/   frame_number_*.jpg       人物マスク (白=有効)
   imu/     transitions.json idle_spans.json
   floors/  1F.json 1F.jpg … meta.json   ← meta.json に図面の実寸
-  results/<session>/                 ← 出力はここだけ
+  results/                           ← 出力はここだけ
 ```
 
 入口は**リポジトリ直下の `main.py`** (Docker イメージの ENTRYPOINT)。
@@ -34,23 +34,29 @@ python main.py steps                                       # 段の一覧
 > `floors/meta.json` の `known_width_mm` (最外壁芯間のx方向スパン[mm]) が
 > 無いと図面アンカーは動かない。**壁注釈だけでは px→m が決まらない。**
 
-## 既存7セッション (開発用CLI)
+## 個別モジュールを叩く (開発・調査)
+
+段より細かい単位で回したいときは `tool`。各モジュールの argparse を
+そのまま使う (`-h` はツール側のヘルプに通る)。
 
 ```bash
-# 本番 (GTなし): 推論 → 手動で階を割当 → アンカー以降
-python -m recon3d.pipeline run --session 0912 --segments imu --max-seg 160 --no-eval
-python -m recon3d.core.floor_assign --template   # 雛形を編集して階を割り当てる
-python -m recon3d.pipeline run --session 0912 --segments imu --max-seg 160 \
-    --post anchor,hier,export,viewer --no-eval
-
-# メイン一発 (prep → chains → eval)
-python -m recon3d.pipeline run --session 0616
-
-# 後処理込み (図面アンカー+階層移送+点群書き出し+ビューア)
-python -m recon3d.pipeline run --session 0616 --post anchor,hier,export,viewer
-
-python -m recon3d.pipeline stages   # 段の説明
+python main.py tool                            # ツール一覧
+python main.py tool posegraph --input /data/x --from-tag pv_s001
+python main.py tool floor_assign --input /data/x --template
+python main.py tool corners --input /data/x --anchor pv_s001:1F
 ```
+
+## 間取り図から3Dモデル (plan2model)
+
+撮影とは独立の系統。`floors/*.json` (labelme) と `floors/meta.json` の
+`known_width_mm` だけで動く。
+
+```bash
+python main.py plan2model verify input=/data/x   # 2D再投影IoU + オーバーレイ
+python main.py plan2model build  input=/data/x   # glb / obj / report.json
+```
+
+出力は `results/plan2model/`。詳細は [`plan2model/README.md`](plan2model/README.md)。
 
 実行環境: **単一 Docker イメージ** (`reconstruction_3d/Dockerfile`、
 compose サービス `recon3d`)。PanoVGGT 推論から図面アンカーまで同一プロセスで走る。
@@ -73,17 +79,9 @@ docker compose exec recon3d python main.py run input=/data/reconstruction
 `mapany` 後処理と `pi3`/`holo` は別コンテナ。`mesh/*` (open3d) と `gs/*`
 (gsplat) はこのイメージに入れていない。
 
-セッションは環境変数 `IMG_SESSION`。`config.py` が import 時に凍結するので、
-**必ず env 設定後に import される**こと。受け付ける形は3つ:
-
-| 形 | 意味 |
-|---|---|
-| `0912` | 登録済みセッション名 |
-| `/data/reconstruction` | データセットディレクトリ (名前=ディレクトリ名) |
-| `myrun=/data/reconstruction` | 名前を明示 (同じ入力を条件違いで回す) |
-
-子プロセスやコンテナには `config.SESSION` ではなく **`config.SESSION_REF`**
-を渡すこと (`SESSION` は登録後の派生名で、env に戻すと落ちる)。
+**データセットを指すのは `input=` だけ**。所在は `paths.py` の `Paths` に
+入り、各段へ**引数で配られる** — 環境変数もモジュール凍結も無い。
+タグ接頭辞や出力先は入力ディレクトリ名から決まる。
 
 ---
 
@@ -104,13 +102,13 @@ docker compose exec recon3d python main.py run input=/data/reconstruction
 
 - **入力**: equirectフレーム列(`images/`、5376×2688)、人物マスク
   (`masks/` または seg_ade20k出力)、IMU派生物(`imu/`)
-- **内容**: 入力の `imu/*.json|npz` を `results/<s>/imu/` へコピーし、
+- **内容**: 入力の `imu/*.json|npz` を `results/imu/` へコピーし、
   取り込んだ名前を `_materialized.json` に記録する(次回はそれを消してから
   張り直す ← `imu_segments` は `exists()` しか見ないので古い残骸が効き続ける)。
   人物マスクの有無を確認する。後処理`mapany`を使う場合のみ、equirect から
   ピンホールクロップ(FOV130°/pitch10°/518px、人物黒塗り)を生成する
-- **出力**: `results/<s>/imu/`(取り込み分)、
-  `results/<s>/vidmap/mapany_f130/`(クロップ)+`name_map_*.json`
+- **出力**: `results/imu/`(取り込み分)、
+  `results/vidmap/mapany_f130/`(クロップ)+`name_map_*.json`
 
 ### 2. chains(前半) — 前段モデルのチャンク推論(`core/chunking`+`core/panovggt`)
 
@@ -127,7 +125,7 @@ docker compose exec recon3d python main.py run input=/data/reconstruction
   窓ごとにPanoVGGTでポーズ+点群を推論する(一括推論は低重なりで破綻するため)。
   島=階の連続訪問区間を計画し(階段区間は除外、`--max-seg`超の長い区間は等分割)、
   **島が必要とするチャンクだけ**推論する。既存チャンクはスキップ(再開可能)
-- **出力**: `results/<s>/pcd/chunks/chunk_XX/`(チャンクごとの
+- **出力**: `results/pcd/chunks/chunk_XX/`(チャンクごとの
   `cameras.npz`・`points.ply`・per-frame点群)+島台帳 `pv_manifest.json`
 - **モデル切替** `--model {pv,pi3,holo}`: 既定`pv`=PanoVGGT(recon3d イメージ内)。
   `pi3`/`holo`(=Pi3-Finetuned-Holo360D)は**pi3コンテナ**で動き、
@@ -145,7 +143,7 @@ docker compose exec recon3d python main.py run input=/data/reconstruction
   **trimmed Sim(3) ICP**(対応の下位30%棄却、スケールは初期値±25%クランプ=
   縮小退化防止)で整合し、チャンク0座標系へ順送りに合成する(VGGT-Long式)。
   島を短く保つほどドリフトが小さい(実測: ≦130フレームで median 0.03〜0.27m)
-- **出力**: 島ごとの `results/<s>/frontend_bench/pv<sess>_<島>/`
+- **出力**: 島ごとの `results/frontend_bench/pv<sess>_<島>/`
   (`global_cameras.npz`=全フレームのポーズ・位置、`global_points.ply`=合成点群、
   `chain_log.json`=連結残差ログ)。座標は非メートル(チャンク0ゲージ)
 
@@ -155,7 +153,7 @@ docker compose exec recon3d python main.py run input=/data/reconstruction
 
 - **入力**: 島タグの `global_cameras.npz`、GT軌跡
   (`<物件>/trajectory_points.csv`。未配備の物件のみ手動登録
-  `results/<s>/backend/gt_trajectory.csv` にフォールバック)
+  `results/backend/gt_trajectory.csv` にフォールバック)
 - **内容**: 重力整列(カメラup中央値→+y)→XZ平面に落とし、鏡映2択×2D相似フィットで
   GT軌跡へ全フレーム合わせ、残差を測る(**フィットATE**)。図面照合を使わないので
   「前段の相対幾何の正確さ」だけを公平に測れる。
@@ -187,7 +185,7 @@ docker compose exec recon3d python main.py run input=/data/reconstruction
 **`imu/timeline.py` が唯一の窓口**:
 
 1. `imu/frame_times.npz`(insvテレメトリ `Default/Timestamps` 由来の実測時刻。
-   `docker compose exec -e IMG_SESSION=<S> imu python -m recon3d.imu.frame_times` で生成。
+   `docker compose exec imu python -m recon3d.imu.frame_times` で生成。
    telemetry_parserとimu_trajはimuコンテナにのみ存在)
 2. 無ければ `meta.json` の `duration_s / N` で等間隔
 
@@ -210,21 +208,21 @@ docker compose exec recon3d python main.py run input=/data/reconstruction
 
 | パッケージ | 役割 |
 |---|---|
-| `config.py` | セッション/物件レジストリ・パス・SESSION_CFG(唯一のIMG_SESSION読取り元)。IMG_SESSION はパスも受け、`_register_dataset` がその場で Property を組む |
+| `paths.py` | **データセットの所在** (`Paths`)。入力1ディレクトリから in/out を導く凍結 dataclass。引数で引き回す — モジュール変数に固めない |
+| `constants.py` | 入力に依らない定数だけ (代表フレーム数・ラベル定義など) |
 | `steps.py` | **段の登録表と依存解決** (`needs`/`before`/`caps` + graphlib)。順序はここが決める |
 | `main.py` (直下) | **ポッドの ENTRYPOINT**。`tools/recon` の薄いラッパ |
 | `api.py` | Python から呼ぶ入口 (`run` / `plan`)。**このプロセスで実行する** — 1ポッド1データセットならプロセス分離は要らない |
-| `pipeline.py` | 既存7セッション用の互換CLI (引数を steps.py のオプションへ翻訳するだけ) |
 | `conf/` | hydra設定 (`recon.yaml` = 入力ディレクトリ実行) |
 | `core/` | `caps`(入力の能力判定 + 使える CPU 数) `signals`(入口が SIGTERM をプロセスグループへ中継) `ingest`(入力の imu/ を results へ台帳つきコピー) `panovggt`(チャンク推論subprocess) `panovggt_batch`(一括推論=モデル読込1回) `floor_assign`(手動の階割当) `floor_seq`(IMU遷移からの階決定。2/6セッションのみ) `pi3`(Pi3/Pi3-FT推論、PanoVGGT互換出力) `chunking`(島計画) `chaining`(連結) `crops`(e2pクロップ) `plan_grid`(図面グリッド) `geometry`(Sim3/重力/ヨー統計) `io_ply` |
 | `postproc/` | 上表の後処理+`anchor_run`(全島を並列アンカー) `mapany_run`(mapany起動) `anchor_score`(候補スコア) `scale_prior`(m_per_unitの供給源) `island_quality`(島の指紋の濃さ。判別力は無かった) `metric_stitch`(図面なしメートル化。不発) `density_map`(壁密度地図) `plan_match`(FFTグリッド照合) `plan_icp`(point-to-line ICP・座標変換ユーティリティ) `anchor`(島アンカー本体・prepare_island) |
 | `eval/` | `anchor_oracle`(候補に正解があるか) `anchor_confidence`(GT無しで当たりを見分ける指標) `anchor_overlay`(アンカー素の出力) `density_view`(密度地図) `outdoor_proxy`(屋外島の暫定判定) `scale_probe` `gt_traj`(GT読込・`mm_per_px()`=遅延評価の関数・GTは物件ごとの trajectory_points.csv) `frontend`(フィットATE) `chunk_cmp`(チャンク単体採点+`gt_interp`) `floor_overlay`(階別の図面オーバーレイ比較) `overview`(島別色分け) `island_diag`(島内診断) `depth`(壁面残差で点群品質比較) |
 | `out/` | `export` `viewer` |
+| `plan2model/` | **間取り図→3Dモデル** (loader/calibrate/geometry/mesh/build/verify)。撮影と独立の系統 |
 | `tools/` | `recon`(**入力ディレクトリから回すCLI**。入口は直下の `main.py`) `_hydra`(hydra読込の共通部) `align_tool`(ブラウザ手動登録) `mask_eval_tool` `boundary_mask`(敷地マスク) `model_bench`(3モデル×窓の比較ドライバ) |
 | `gs/` `mesh/` | Gaussian Splatting / メッシュ・衝突モデル の各系統 |
 | `imu/` | insv抽出(`extract`)・姿勢(`attitude`)・**階段検出(`transitions`=stairnet CNN、島計画の本番ソース)**・**フレーム時刻(`frame_times`→`timeline`)**ほか |
-| `tests/` | pytest 無しでも走る検査 (`check_config`=凍結値スナップショット / `check_imports`=importスモーク) |
-| `legacy/` | 退役スパイク・実験(動態保存。新規参照は禁止) |
+| `tests/` | pytest 無しでも走る検査 (`check_imports`=importスモーク+`paths` 省略の禁止 / `check_paths`=実物の入力で `Paths` を確かめる) |
 
 ## 旧→新モジュール対応(2026-10-07再編)
 
@@ -253,8 +251,7 @@ docker compose exec recon3d python main.py run input=/data/reconstruction
 | `pipeline.post_mapany` | `postproc.mapany_run.run_mapany` |
 | `--post` を書いた順に実行 | `steps.resolve` が依存で順序を決める |
 | `eval.gt_traj.MM_PER_PX`(import時に評価する定数) | `eval.gt_traj.mm_per_px()`(遅延+キャッシュ) |
-| `config._register_ext`(ext/ 専用) | `config._register_dataset`(任意のディレクトリ) |
-| `IMG_SESSION` はセッション名のみ | 名前 / パス / `名前=パス` の3形 |
+| `config._register_ext`(ext/ 専用) | `input=` に任意のディレクトリ |
 | 入力の imu/ は手で置く | `core.ingest.materialize_imu`(台帳つき) |
 | PanoVGGT は conda env の subprocess | **同一プロセス** (`PANOVGGT_DIR` 必須)。単一 Docker イメージ |
 | `python main.py` | `python main.py` (イメージの ENTRYPOINT) |
@@ -323,3 +320,20 @@ occupancyなので不変でも、その前段 (スラブ検出・バウンディ
 - **アンカーは点の並び順に依存する**。同じ点群でも `merged` 経路と
   `per_frame` 経路で 0616 が 1.46/1.62m と 0.69/0.51m に分かれた。
   多くの島が判定の境界線上にいるということで、小さな差が結果を裏返す
+
+## 旧→新対応(2026-10-20 recon3d 1モジュール化)
+
+| 旧 | 新 |
+|---|---|
+| `img_align.*` | `recon3d.*` |
+| 旧 `recon3d.loader` / `calibrate` / `build` / `verify` ほか7本 | `recon3d.plan2model.*` |
+| `config.py` の物件レジストリ + `IMG_SESSION` | `paths.Paths` を**引数で引き回す** |
+| `config.SESSION` / `SESSION_REF` / `SESSION_CFG` | 廃止 (入力ディレクトリがデータセット) |
+| `config.BENCH_DIR` / `OUT_DIR` / `ZUMEN_DIR` / `KNOWN_WIDTH_MM` | `paths.bench` / `paths.backend` / `paths.floors` / `paths.known_width_mm` |
+| `results/<session>/` (入力名が二重に付いた) | `results/` |
+| `python -m recon3d.<module>` (モジュール直叩き) | `python main.py tool <name> --input <dir>` |
+| `python -m recon3d.build --floors 1F=... --width-mm 9100` | `python main.py plan2model build input=<dir>` |
+| `pipeline.py` / `legacy/` / `gs/` / `seg_ade20k` ほか64本 | 削除 |
+
+> 本番入口から到達しないモジュールは**残さない**方針にした。削除分は
+> git 履歴 (`ca5c883` 以前) にある。

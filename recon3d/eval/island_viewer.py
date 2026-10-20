@@ -18,7 +18,6 @@ import json
 
 import numpy as np
 
-from recon3d.config import BENCH_DIR, OUT_DIR
 from recon3d.out.viewer import VIEWER_MAX_PTS, build_viewer
 from recon3d.postproc.anchor import prepare_island
 from recon3d.postproc.scale_prior import m_per_unit
@@ -40,18 +39,18 @@ def height_rgb(y):
     return rgb
 
 
-def export(tag, use_rgb=False, max_pts=VIEWER_MAX_PTS, band=None):
+def export(paths, tag, use_rgb=False, max_pts=VIEWER_MAX_PTS, band=None):
     # **素の点群を見るのが目的**なので WALL_BAND_M は既定で外す
     # (掛けたままだと高さ1m程度に切られ、壁が通っているか確認できない)
     import recon3d.postproc.anchor as _a
     saved, _a.WALL_BAND_M = _a.WALL_BAND_M, band
     try:
-        mpu, _ = m_per_unit(tag)
-        d = prepare_island(tag, mpu=mpu)
+        mpu, _ = m_per_unit(paths, tag)
+        d = prepare_island(paths, tag, mpu=mpu)
     finally:
         _a.WALL_BAND_M = saved
     pts = d["density_pts"]            # スラブ除去+バウンディング済み (密度の素材)
-    full = np.load(BENCH_DIR / tag / "global_cameras.npz")
+    full = np.load(paths.bench / tag / "global_cameras.npz")
     k = max(1, len(pts) // max_pts)
     w = pts[::k]
     # メートルに直す (以降の寸法読みが素直になる)
@@ -67,37 +66,34 @@ def export(tag, use_rgb=False, max_pts=VIEWER_MAX_PTS, band=None):
     out = np.stack([xyz[:, 0], xyz[:, 2], -xyz[:, 1]], axis=1)
     rgb = (np.full((len(w), 3), 180, np.uint8) if use_rgb
            else height_rgb(out[:, 2]))
-    build_viewer(out, rgb, sfx=f"_island_{tag}")
-    src = OUT_DIR / f"viewer_island_{tag}.html"
+    build_viewer(paths, out, rgb, sfx=f"_island_{tag}")
+    src = paths.backend / f"viewer_island_{tag}.html"
     print(f"-> {src}")
     return src, {"tag": tag, "n_pts": int(len(pts)), "cam_y_m": cam_y,
                  "floor_y_m": floor_y, "height_span_m": span_m,
                  "n_frames": int(len(full["names"]))}
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--islands", nargs="*", default=None)
     ap.add_argument("--manifest", default="pv_manifest.json")
     ap.add_argument("--rgb", action="store_true", help="高さ色でなく無彩色")
     ap.add_argument("--band", type=float, default=None,
                     help="帯を掛けて見る (既定は素の点群)")
-    args = ap.parse_args()
-    man = json.loads((BENCH_DIR / args.manifest).read_text())
+    args = ap.parse_args(argv)
+    man = json.loads((paths.bench / args.manifest).read_text())
     info = []
     for m in man:
         if args.islands and m["tag"] not in args.islands:
             continue
         try:
-            _, i = export(m["tag"], args.rgb, band=args.band)
+            _, i = export(paths, m["tag"], args.rgb, band=args.band)
             info.append(i)
         except Exception as e:
             print(f"{m['tag']}: 失敗 ({type(e).__name__}: {e})")
     if info:
-        p = OUT_DIR / "island_viewer_summary.json"
+        p = paths.backend / "island_viewer_summary.json"
         p.write_text(json.dumps(info, ensure_ascii=False, indent=1))
         print(f"-> {p}")
 
-
-if __name__ == "__main__":
-    main()

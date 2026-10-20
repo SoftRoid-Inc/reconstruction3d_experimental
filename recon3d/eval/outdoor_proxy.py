@@ -21,7 +21,6 @@ import json
 import numpy as np
 from PIL import Image
 
-from recon3d.config import BENCH_DIR, FRAMES_DIR, OUT_DIR, frame_name
 
 TOP_FRAC = 0.22      # 上端から見る帯 (天頂側)
 BRIGHT = 120         # 空とみなす明るさ
@@ -31,9 +30,9 @@ OUT_FRAC = 0.5       # 島のフレームのうちこの割合が屋外なら屋
 SAMPLE = 6           # 何フレームに1枚見るか
 
 
-def sky_ratio(frame):
+def sky_ratio(paths, frame):
     """1フレームの上端帯における空らしさ [0,1]"""
-    p = FRAMES_DIR / frame_name(frame)
+    p = paths.images / paths.frame_name(frame)
     if not p.exists():
         return None
     im = Image.open(p).convert("RGB").resize((256, 128))
@@ -43,9 +42,9 @@ def sky_ratio(frame):
     return float(sky.mean())
 
 
-def island_outdoor(a, b, sample=SAMPLE):
+def island_outdoor(paths, a, b, sample=SAMPLE):
     """島の屋外率と判定"""
-    r = [v for f in range(a, b + 1, sample) if (v := sky_ratio(f)) is not None]
+    r = [v for f in range(a, b + 1, sample) if (v := sky_ratio(paths, f)) is not None]
     if not r:
         return None
     frac = float(np.mean([v > SKY_FRAC for v in r]))
@@ -54,24 +53,21 @@ def island_outdoor(a, b, sample=SAMPLE):
             "outdoor": frac >= OUT_FRAC, "n": len(r)}
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default="pv_manifest.json")
-    args = ap.parse_args()
-    man = json.loads((BENCH_DIR / args.manifest).read_text())
+    args = ap.parse_args(argv)
+    man = json.loads((paths.bench / args.manifest).read_text())
     rows = []
     print(f"{'island':20} {'屋外率':>7} {'空(中央)':>9}  判定")
     for m in man:
-        r = island_outdoor(m["a"], m["b"])
+        r = island_outdoor(paths, m["a"], m["b"])
         if r is None:
             continue
         rows.append({"tag": m["tag"], **r})
         print(f"{m['tag']:20} {r['outdoor_frac']:7.2f} {r['sky_median']:9.3f}  "
               f"{'屋外' if r['outdoor'] else '室内'}")
-    (OUT_DIR / "outdoor_proxy.json").write_text(
+    (paths.backend / "outdoor_proxy.json").write_text(
         json.dumps(rows, indent=1, ensure_ascii=False))
-    print(f"-> {OUT_DIR / 'outdoor_proxy.json'}")
+    print(f"-> {paths.backend / 'outdoor_proxy.json'}")
 
-
-if __name__ == "__main__":
-    main()

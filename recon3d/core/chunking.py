@@ -5,14 +5,12 @@ PanoVGGTで推論(既存はスキップ=再開可能)して chain_chunks で連�
 階段またぎを避けるため、区間内に完全に収まるチャンクのみ使う(不足時は重なり許容)。
 
 出力: frontend_bench/pv<sess>_<fl>[a,b,…]/ と pv_manifest.json
-使い方: IMG_SESSION=0715 python -m recon3d.core.chunking
+使い方: python main.py run input=/data/reconstruction 'steps=[chains]'
 """
 import json
 
-from recon3d.config import BENCH_DIR
 from recon3d.core.chaining import chain_and_save
-from recon3d.config import FRAMES_DIR, SESSION
-from recon3d.core.panovggt import PCD_DIR, select_entries
+from recon3d.core.panovggt import select_entries
 
 CHUNK_SIZE = 16
 CHUNK_STRIDE = 12          # 重なり = CHUNK_SIZE - CHUNK_STRIDE = 4フレーム
@@ -51,14 +49,14 @@ MIN_RESCUE_FRAMES = 12  # 切除後の端切れをミニ島として救済する
 MIN_ANCHOR_FRAMES = 36
 
 
-def gt_segments():
+def gt_segments(paths):
     """GT軌跡 → [(floor, a, b)] (連続訪問区間)。開発・評価用 (GT必要)
 
     GTの出どころは物件で違う (28-BBBBB=手動登録CSV / 28-AAAAA=メタCSV) ので
     直接CSVを開かず load_gt に任せる。
     """
     from recon3d.eval.gt_traj import load_gt
-    rows = [(f, v["floor"]) for f, v in sorted(load_gt().items())]
+    rows = [(f, v["floor"]) for f, v in sorted(load_gt(paths).items())]
     segs, cur = [], None
     for fr, fl in rows:
         if cur and fl == cur[0] and fr - cur[2] <= GAP_FRAMES:
@@ -78,7 +76,7 @@ IDLE_PAD = 2          # 静止区間の前後マージン (検出は真の静止
 MIN_IDLE_FRAMES = 4   # これ未満の静止は切断しない (島を無駄に刻まない)
 
 
-def idle_cuts(n_frames):
+def idle_cuts(paths, n_frames):
     """静止区間 (imu.idle) → 切断点 [(a, b)]。無ければ空
 
     並進ゼロでは三角測量が成立せず、その区間を含むチャンク接続が島全体を壊す
@@ -86,15 +84,14 @@ def idle_cuts(n_frames):
     「島に入れる価値が無い区間」として切断する。
     """
     from recon3d.imu.idle import detect, spans
-    from recon3d.config import IMU_DIR
-    if not (IMU_DIR / "idle_spans.json").exists():
+    if not (paths.imu / "idle_spans.json").exists():
         try:
-            detect()
+            detect(paths)
         except Exception as e:
             print(f"[idle] 検出失敗 ({type(e).__name__}) -> 静止切断なしで続行")
             return []
     out = []
-    for a, b in spans():
+    for a, b in spans(paths):
         if b - a + 1 < MIN_IDLE_FRAMES:
             continue
         out.append((max(0, a - IDLE_PAD), min(n_frames - 1, b + IDLE_PAD)))
@@ -103,7 +100,7 @@ def idle_cuts(n_frames):
     return out
 
 
-def imu_segments(n_frames, use_idle=True):
+def imu_segments(paths, n_frames, use_idle=True):
     """IMU階段検出 (imu.transitions, stairnet CNN) → [(None, a, b)]。GT不要
 
     検出イベント(昇降)を切断点として区間を切る。stairnetは再現率が高い一方、
@@ -111,11 +108,10 @@ def imu_segments(n_frames, use_idle=True):
     (見逃しによる階段またぎ島だけが有害)。階ラベルは付けない
     (昇降の積算は過検出で壊れるため、アンカー段で全フロア照合して決める)。
     """
-    from recon3d.config import IMU_DIR
-    tr_path = IMU_DIR / "transitions.json"
+    tr_path = paths.imu / "transitions.json"
     if not tr_path.exists():
         from recon3d.imu.transitions import detect
-        detect()
+        detect(paths)
     ev = json.loads(tr_path.read_text())["events"]
     fdt = max(e["t_end"] for e in ev) / max(n_frames, 1) if ev else 0.5
     cuts = []
@@ -130,7 +126,7 @@ def imu_segments(n_frames, use_idle=True):
         else:
             cuts.append((a, b))
     if use_idle:        # 静止区間も同じ扱いの切断点として合流
-        cuts = sorted(cuts + idle_cuts(n_frames))
+        cuts = sorted(cuts + idle_cuts(paths, n_frames))
         merged = []
         for a, b in cuts:
             if merged and a <= merged[-1][1] + GAP_FRAMES:
@@ -149,13 +145,13 @@ def imu_segments(n_frames, use_idle=True):
     return segs
 
 
-def build_manifest(windows, max_seg=None, segments=None, prefix="pv",
+def build_manifest(paths, windows, max_seg=None, segments=None, prefix="pv",
                    tag_suffix=""):
     """max_seg指定時: それより長い訪問区間を等分割する (長島ドリフト対策。
     タグは pv0925_1Fa1, 1Fa2… のように数字接尾辞)。
     segments: [(floor|None, a, b)] を外部注入可 (imu_segments等)。
     floor=None の区間はタグ pv<sess>_sNN (階はアンカー段で決める)"""
-    segs = segments if segments is not None else gt_segments()
+    segs = segments if segments is not None else gt_segments(paths)
     by_floor = {}
     for fl, a, b in segs:
         by_floor.setdefault(fl, []).append((a, b))
@@ -188,14 +184,14 @@ def build_manifest(windows, max_seg=None, segments=None, prefix="pv",
                                        for ca_, cb_ in cuts)]
                     if not use:
                         continue    # 切断域を避けられない小区間は破棄
-                ent = {"tag": f"{prefix}{SESSION}_{fl_name}{sfx}{dsfx}"
+                ent = {"tag": f"{prefix}{paths.name}_{fl_name}{sfx}{dsfx}"
                               f"{tag_suffix}",
                        "floor": fl, "a": a2, "b": b2, "chunks": use}
                 if parts > 1:
                     # 分割サブ島は親を明示する。タグ末尾の数字で判定すると
                     # IMU区間のタグ (pv<sess>_sNN) を誤ってサブ島扱いしてしまう
                     # (2026-10-14: 本番で6島中5島がskipされていた)
-                    ent["parent"] = (f"{prefix}{SESSION}_{fl_name}{sfx}"
+                    ent["parent"] = (f"{prefix}{paths.name}_{fl_name}{sfx}"
                                      f"{tag_suffix}")
                 manifest.append(ent)
     return manifest
@@ -207,14 +203,14 @@ def build_manifest(windows, max_seg=None, segments=None, prefix="pv",
 MODEL_DIRS = {"pv": ("chunks", "pv")}
 
 
-def infer_chunks(model, windows, needed, chunks_dir, entries):
+def infer_chunks(paths, model, windows, needed, chunks_dir, entries):
     """欠けているチャンクだけ推論する (既存はスキップ=再開可能)
 
     1チャンクずつモデルを読み直すと固定コスト12.2秒が毎回かかる
     (実推論は16フレームで9秒)。まとめて1プロセスに渡して1回に抑える。
     """
     miss = [(k, *windows[k]) for k in needed
-            if not (PCD_DIR / chunks_dir / f"chunk_{k:02d}"
+            if not (paths.pcd / chunks_dir / f"chunk_{k:02d}"
                     / "cameras.npz").exists()]
     if not miss:
         return
@@ -222,9 +218,9 @@ def infer_chunks(model, windows, needed, chunks_dir, entries):
         raise SystemExit(f"未知のモデル {model!r} (有効: pv)")
     from recon3d.core.panovggt import run_chunks
     print(f"[pv] {len(miss)} チャンクを一括推論", flush=True)
-    run_chunks(miss, entries, chunks_dir, use_mask=True)
+    run_chunks(paths, miss, entries, chunks_dir, use_mask=True)
 
-def run_batch(max_seg=None, manifest_out=None,
+def run_batch(paths, max_seg=None, manifest_out=None,
               chunks_dir=None, segments_source="gt", stride=None,
               use_idle=True, model="pv", chunk_size=None, tag_suffix=""):
     """前段一括: 区間計画 → チャンク推論(既存スキップ) → 区間別チェーン
@@ -240,30 +236,30 @@ def run_batch(max_seg=None, manifest_out=None,
     dflt_dir, prefix = MODEL_DIRS[model]
     chunks_dir = chunks_dir or dflt_dir
     manifest_out = manifest_out or f"{prefix}_manifest.json"
-    n = len(sorted(FRAMES_DIR.glob("frame_number_*.jpg")))
-    entries = select_entries(f"0:{n}:1")
+    n = len(sorted(paths.images.glob("frame_number_*.jpg")))
+    entries = select_entries(paths, f"0:{n}:1")
     windows = chunk_windows(n, stride, chunk_size)
-    segs = imu_segments(n, use_idle) if segments_source == "imu" else None
-    manifest = build_manifest(windows, max_seg=max_seg, segments=segs,
+    segs = imu_segments(paths, n, use_idle) if segments_source == "imu" else None
+    manifest = build_manifest(paths, windows, max_seg=max_seg, segments=segs,
                               prefix=prefix, tag_suffix=tag_suffix)
     for m in manifest:
         print(f"{m['tag']}: frames {m['a']}-{m['b']} chunks {m['chunks'][0]}"
               f"..{m['chunks'][-1]}")
 
     needed = sorted({k for m in manifest for k in m["chunks"]})
-    infer_chunks(model, windows, needed, chunks_dir, entries)
+    infer_chunks(paths, model, windows, needed, chunks_dir, entries)
 
     for m in manifest:
-        cdirs = [PCD_DIR / chunks_dir / f"chunk_{k:02d}" for k in m["chunks"]]
+        cdirs = [paths.pcd / chunks_dir / f"chunk_{k:02d}" for k in m["chunks"]]
         print(f"=== chain {m['tag']}", flush=True)
-        chain_and_save(cdirs, m["tag"])
-    BENCH_DIR.mkdir(parents=True, exist_ok=True)
-    (BENCH_DIR / manifest_out).write_text(json.dumps(manifest, indent=1))
-    print(f"-> {BENCH_DIR / manifest_out} ({len(manifest)} islands)")
+        chain_and_save(paths, cdirs, m["tag"])
+    paths.bench.mkdir(parents=True, exist_ok=True)
+    (paths.bench / manifest_out).write_text(json.dumps(manifest, indent=1))
+    print(f"-> {paths.bench / manifest_out} ({len(manifest)} islands)")
     return manifest
 
 
-def stair_resplit(manifest, chunks_dir="chunks",
+def stair_resplit(paths, manifest, chunks_dir="chunks",
                   manifest_out="pv_manifest.json", max_depth=2, stride=None):
     """チェーン済み島を幾何検査し、階段またぎ島を自動再分割して再チェーンする
 
@@ -271,14 +267,14 @@ def stair_resplit(manifest, chunks_dir="chunks",
     分割後の半島は「区間内に完全に収まるチャンク」のみ使う (階段チャンク排除)。
     """
     from recon3d.core.stair_check import find_stair, island_vertical
-    n = len(sorted(FRAMES_DIR.glob("frame_number_*.jpg")))
+    n = len(sorted(paths.images.glob("frame_number_*.jpg")))
     windows = chunk_windows(n, stride)
     out = []
     queue = [(m, 0) for m in manifest]
     while queue:
         m, depth = queue.pop(0)
         try:
-            s = find_stair(*island_vertical(m["tag"]))
+            s = find_stair(*island_vertical(paths, m["tag"]))
         except Exception as e:
             print(f"[stair_check] {m['tag']}: 検査失敗 ({e}) -> そのまま採用")
             s = None
@@ -313,10 +309,10 @@ def stair_resplit(manifest, chunks_dir="chunks",
                 continue
             sub = {"tag": f"{m['tag']}r{i + 1}", "floor": m["floor"],
                    "a": a2, "b": b2, "chunks": use}
-            cdirs = [PCD_DIR / chunks_dir / f"chunk_{k:02d}" for k in use]
+            cdirs = [paths.pcd / chunks_dir / f"chunk_{k:02d}" for k in use]
             print(f"=== chain {sub['tag']}", flush=True)
             try:
-                chain_and_save(cdirs, sub["tag"])
+                chain_and_save(paths, cdirs, sub["tag"])
             except Exception as e:
                 print(f"  {sub['tag']}: チェーン失敗 ({e}) -> 破棄")
                 continue
@@ -326,13 +322,13 @@ def stair_resplit(manifest, chunks_dir="chunks",
             out.append(m)
         for sub in subs:
             queue.append((sub, depth + 1))
-    (BENCH_DIR / manifest_out).write_text(json.dumps(out, indent=1))
+    (paths.bench / manifest_out).write_text(json.dumps(out, indent=1))
     print(f"[stair_check] {len(manifest)} -> {len(out)} islands "
           f"(-> {manifest_out})")
     return out
 
 
-def stair_remerge(manifest, chunks_dir="chunks",
+def stair_remerge(paths, manifest, chunks_dir="chunks",
                   manifest_out="pv_manifest.json",
                   max_gap=120, max_len=None, stride=None, max_seg=None,
                   model="pv"):
@@ -347,7 +343,7 @@ def stair_remerge(manifest, chunks_dir="chunks",
     # 長島ドリフトで精度が落ちる。0428で 0.25m -> 0.99m の実例)
     if max_len is None:
         max_len = int(max_seg) if max_seg else 160
-    n = len(sorted(FRAMES_DIR.glob("frame_number_*.jpg")))
+    n = len(sorted(paths.images.glob("frame_number_*.jpg")))
     windows = chunk_windows(n, stride)
     manifest = sorted(manifest, key=lambda m: m["a"])
     tried = set()
@@ -369,14 +365,14 @@ def stair_remerge(manifest, chunks_dir="chunks",
             if len(use) < 2:
                 continue
             tag = f"{m1['tag']}m"
-            cdirs = [PCD_DIR / chunks_dir / f"chunk_{k:02d}" for k in use]
+            cdirs = [paths.pcd / chunks_dir / f"chunk_{k:02d}" for k in use]
             print(f"[remerge] {m1['tag']}+{m2['tag']} (gap {gap}f) を試行",
                   flush=True)
             try:
-                entries = select_entries(f"0:{n}:1")
-                infer_chunks(model, windows, use, chunks_dir, entries)
-                chain_and_save(cdirs, tag)
-                s = find_stair(*island_vertical(tag))
+                entries = select_entries(paths, f"0:{n}:1")
+                infer_chunks(paths, model, windows, use, chunks_dir, entries)
+                chain_and_save(paths, cdirs, tag)
+                s = find_stair(*island_vertical(paths, tag))
             except Exception as e:
                 print(f"  失敗 ({e}) -> 統合せず")
                 continue
@@ -401,12 +397,12 @@ def stair_remerge(manifest, chunks_dir="chunks",
                 changed = True
                 break
             print(f"  鉛直異常あり ({s[2]:.2f}×カメラ高) -> 切断は本物、維持")
-    (BENCH_DIR / manifest_out).write_text(json.dumps(manifest, indent=1))
+    (paths.bench / manifest_out).write_text(json.dumps(manifest, indent=1))
     print(f"[remerge] -> {len(manifest)} islands")
     return manifest
 
 
-def main():
+def main(paths, argv=None):
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-seg", type=int, default=None,
@@ -420,9 +416,7 @@ def main():
     ap.add_argument("--no-idle", action="store_true",
                     help="静止区間での切断を無効化 (対照実験用)")
     args = ap.parse_args()
-    run_batch(args.max_seg, args.manifest_out, args.chunks_dir, args.segments,
+    run_batch(paths, args.max_seg, args.manifest_out, args.chunks_dir,
+              args.segments,
               args.stride, use_idle=not args.no_idle)
 
-
-if __name__ == "__main__":
-    main()

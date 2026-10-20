@@ -13,14 +13,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+from recon3d.constants import CAM_HEIGHT_M
 from scipy.signal import find_peaks
 
-from recon3d.config import CAM_HEIGHT_M
 from recon3d.core.geometry import (camera_centers,
                                      gravity_from_cameras,
                                      rotation_to_y)
 from recon3d.core.io_ply import read_ply_xyzrgb
-from recon3d.core.panovggt import PCD_DIR
 
 CELL_M = 0.05          # 密度マップのセルサイズ (m相当)
 SLAB_MARGIN_M = 0.20   # 床・天井ピーク近傍の除去幅
@@ -62,12 +62,12 @@ def slab_peaks(y):
     return centers[peaks][order], hist, centers
 
 
-def main():
+def main(paths, argv=None):
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag", default=None)
-    args = ap.parse_args()
-    out_dir = PCD_DIR / args.tag if args.tag else PCD_DIR
+    args = ap.parse_args(argv)
+    out_dir = paths.pcd / args.tag if args.tag else paths.pcd
 
     xyz, _ = read_ply_xyzrgb(out_dir / "points.ply")
     cams = np.load(out_dir / "cameras.npz")
@@ -137,6 +137,3 @@ def main():
     plt.close(fig)
     print(f"done -> {out_dir / 'density.png'}")
 
-
-if __name__ == "__main__":
-    main()

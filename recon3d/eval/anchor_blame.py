@@ -18,7 +18,6 @@ import math
 
 import numpy as np
 
-from recon3d.config import BENCH_DIR, OUT_DIR
 from recon3d.core.plan_grid import PlanGrid
 from recon3d.eval.gt_traj import mm_per_px, load_gt
 from recon3d.postproc.anchor import prepare_island
@@ -52,11 +51,11 @@ def sim2_umeyama(src, dst):
     return float(s), float(th), mu_d - s * (R @ mu_s)
 
 
-def blame(tag, floor, gt, mpu_source="mapany"):
+def blame(paths, tag, floor, gt, mpu_source="mapany"):
     """(正解のスコア一式, 採用のスコア一式, 正解のGT残差m, 採用のGT残差m)"""
-    grid = PlanGrid(floor)
-    mpu, _ = m_per_unit(tag, source=mpu_source)
-    d = prepare_island(tag, mpu=mpu)
+    grid = PlanGrid(paths, floor)
+    mpu, _ = m_per_unit(paths, tag, source=mpu_source)
+    d = prepare_island(paths, tag, mpu=mpu)
     cam_rc = np.stack(
         [(d["cam_pos_aligned"][:, 2] - d["origin"][1]) / d["cell_units"],
          (d["cam_pos_aligned"][:, 0] - d["origin"][0]) / d["cell_units"]],
@@ -72,7 +71,7 @@ def blame(tag, floor, gt, mpu_source="mapany"):
     zz, xx = np.nonzero(d["density"] > 0.15)
     wall_pts = np.stack([zz, xx], axis=1).astype(np.float64)
     wall_pts = wall_pts[:: max(1, len(wall_pts) // 20000)]
-    segs = segs_to_cells(wall_segments_px(floor), grid)
+    segs = segs_to_cells(wall_segments_px(paths, floor), grid)
     scorer = AnchorScorer(grid, wall_pts, segs, cam_rc, s_prior=1.0)
 
     def err_of(s, th, t, idx=None):
@@ -81,7 +80,7 @@ def blame(tag, floor, gt, mpu_source="mapany"):
         ref = gt_px if idx is k else np.array(
             [[gt[frames[i]]["x_px"], gt[frames[i]]["y_px"]] for i in idx])
         return float(np.median(np.linalg.norm(px - ref, axis=1))) \
-            * mm_per_px() / 1000
+            * mm_per_px(paths) / 1000
 
     # 正解: GTへの最適相似変換 (鏡映なし)
     s_t, th_t, t_t = sim2_umeyama(cam_rc[k], gt_cells)
@@ -89,7 +88,7 @@ def blame(tag, floor, gt, mpu_source="mapany"):
     e_truth = err_of(s_t, th_t, t_t)
 
     # 採用: corner_anchor が書いた図面px から変換を復元する
-    p = OUT_DIR / f"corner_anchor_{tag}.json"
+    p = paths.backend / f"corner_anchor_{tag}.json"
     if not p.exists():
         return truth, None, e_truth, None
     a = json.loads(p.read_text())
@@ -103,7 +102,7 @@ def blame(tag, floor, gt, mpu_source="mapany"):
     return truth, sel, e_truth, err_of(s_s, th_s, t_s, kk)
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default="pv_manifest.json")
     ap.add_argument("--islands", nargs="*", default=None)
@@ -114,7 +113,7 @@ def main():
     ap.add_argument("--min-y-bins", type=int, default=None,
                     help="密度地図の壁判定: 何個の高さビンに跨れば壁か "
                          "(既定4 = 0.8m。家具もこれを超えるので上げると壁選択的)")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     import recon3d.postproc.anchor as _a
     if args.wall_band:
         _a.WALL_BAND_M = args.wall_band
@@ -123,17 +122,17 @@ def main():
         _a.MIN_Y_BINS = args.min_y_bins
         print(f"[density] MIN_Y_BINS={args.min_y_bins} "
               f"(鉛直 {args.min_y_bins * 0.20:.1f}m 以上を壁とみなす)")
-    gt = load_gt()
+    gt = load_gt(paths)
     from recon3d.core.floor_assign import apply as apply_floor
-    man = apply_floor(json.loads(
-        (BENCH_DIR / args.manifest).read_text()), quiet=True)
+    man = apply_floor(paths, json.loads(
+        (paths.bench / args.manifest).read_text()), quiet=True)
     print(f"{'island':20s} {'姿勢':>4s} {'GT':>6s} {'score':>8s} "
           + " ".join(f"{t:>9s}" for t in TERMS))
     for m in man:
         if not m.get("floor") or (args.islands and m["tag"] not in args.islands):
             continue
         try:
-            r = blame(m["tag"], m["floor"], gt)
+            r = blame(paths, m["tag"], m["floor"], gt)
         except Exception as e:
             print(f"{m['tag']:20s} 失敗 ({type(e).__name__}: {e})")
             continue
@@ -150,6 +149,3 @@ def main():
             win = "正解" if truth[args.key] > sel[args.key] else "**偽解**"
             print(f"{'':20s} ---> スコアの勝者: {win}")
 
-
-if __name__ == "__main__":
-    main()

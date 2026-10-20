@@ -28,42 +28,41 @@ import math
 
 import numpy as np
 
-from recon3d.config import BENCH_DIR, OUT_DIR, SESSION
 from recon3d.eval.gt_traj import mm_per_px, load_gt
 
 
-def gt_error(tag, gt):
+def gt_error(paths, tag, gt):
     """アンカー軌跡とGTの残差 median [m]。採れなければ None"""
-    p = OUT_DIR / f"corner_anchor_{tag}.json"
+    p = paths.backend / f"corner_anchor_{tag}.json"
     if not p.exists():
         return None
     tr = json.loads(p.read_text())
     e = [math.dist(xy, (gt[f]["x_px"], gt[f]["y_px"]))
          for n, xy in tr.items()
          if (f := int(n.replace("frame_", ""))) in gt]
-    return float(np.median(e)) * mm_per_px() / 1000 if len(e) >= 4 else None
+    return float(np.median(e)) * mm_per_px(paths) / 1000 if len(e) >= 4 else None
 
 
-def row(tag, gt, suffix="_corners"):
-    a = OUT_DIR / f"anchor_{tag}{suffix}.json"
+def row(paths, tag, gt, suffix="_corners"):
+    a = paths.backend / f"anchor_{tag}{suffix}.json"
     if not a.exists():
         return None
     d = json.loads(a.read_text())
-    return {"tag": tag, "err_m": gt_error(tag, gt),
+    return {"tag": tag, "err_m": gt_error(paths, tag, gt),
             "score": d.get("score"), "margin": d.get("margin"),
             "recall": d.get("wall_recall"), "cover": d.get("wall_cover"),
             "cam_feas": d.get("cam_feas"), "resid": d.get("wall_resid_m"),
             "n_inliers": d.get("n_inliers")}
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default="pv_manifest.json")
     ap.add_argument("--ok-m", type=float, default=1.0)
-    args = ap.parse_args()
-    gt = load_gt()
-    man = json.loads((BENCH_DIR / args.manifest).read_text())
-    rows = [r for m in man if (r := row(m["tag"], gt)) and r["err_m"] is not None]
+    args = ap.parse_args(argv)
+    gt = load_gt(paths)
+    man = json.loads((paths.bench / args.manifest).read_text())
+    rows = [r for m in man if (r := row(paths, m["tag"], gt)) and r["err_m"] is not None]
     if not rows:
         raise SystemExit("採点できるアンカーがありません")
     print(f"{'island':18} {'GT残差':>7} {'score':>7} {'margin':>7} "
@@ -84,10 +83,7 @@ def main():
         # 分離度: 群間差を全体のばらつきで正規化
         sep = abs(a - b) / max(np.nanstd(v), 1e-9)
         print(f"  {k:10} 成功 {a:8.4f}  失敗 {b:8.4f}  分離度 {sep:.2f}")
-    (OUT_DIR / "anchor_confidence.json").write_text(json.dumps(
-        {"session": SESSION, "rows": rows}, indent=1, ensure_ascii=False))
-    print(f"-> {OUT_DIR / 'anchor_confidence.json'}")
+    (paths.backend / "anchor_confidence.json").write_text(json.dumps(
+        {"session": paths.name, "rows": rows}, indent=1, ensure_ascii=False))
+    print(f"-> {paths.backend / 'anchor_confidence.json'}")
 
-
-if __name__ == "__main__":
-    main()

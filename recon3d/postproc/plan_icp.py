@@ -18,19 +18,18 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+from recon3d.constants import CAM_HEIGHT_M
 from PIL import Image
 
 from recon3d.plan2model.calibrate import scale_mm_per_px
 from recon3d.plan2model.loader import load_labelme
 
-from recon3d.config import CAM_HEIGHT_M
 from recon3d.core.geometry import camera_centers, gravity_from_cameras, rotation_to_y
 from recon3d.postproc.density_map import scale_from_local_floors, slab_peaks
 from recon3d.eval.gt_traj import mm_per_px, evaluate_track, load_gt
-from recon3d.core.plan_grid import KNOWN_WIDTH_MM, RES_M, ZUMEN_DIR, PlanGrid
-from recon3d.config import RESULTS_DIR
+from recon3d.core.plan_grid import RES_M, PlanGrid
 from recon3d.core.io_ply import read_ply_xyzrgb
-from recon3d.core.panovggt import PCD_DIR
 
 CELL_M = 0.05
 Y_BIN_M = 0.20           # 高さビン幅
@@ -43,9 +42,9 @@ ICP_CUTOFF_END = 3.0
 
 # ---------------------------------------------------------------- 密度 v2
 
-def build_density2(tag):
+def build_density2(paths, tag):
     """島/チャンクの points.ply から高さスパン重み密度を作る (density2.npz)"""
-    d = PCD_DIR / tag
+    d = paths.pcd / tag
     xyz, _ = read_ply_xyzrgb(d / "points.ply")
     cams = np.load(d / "cameras.npz")
     conv, up = gravity_from_cameras(cams["poses"])
@@ -92,9 +91,9 @@ def build_density2(tag):
 
 # ---------------------------------------------------------------- 図面の壁線分
 
-def wall_segments_px(floor):
+def wall_segments_px(paths, floor):
     """GT壁+柱の中心線分 (図面px座標)"""
-    plan = load_labelme(ZUMEN_DIR / f"{floor}.json", floor)
+    plan = load_labelme(paths.floors / f"{floor}.json", floor)
     segs = []
     for r in plan.walls + plan.columns:
         if r.w >= r.h:
@@ -104,10 +103,10 @@ def wall_segments_px(floor):
     return np.array(segs, dtype=np.float64)
 
 
-def wall_face_segments_px(floor):
+def wall_face_segments_px(paths, floor):
     """GT壁+柱の両面ライン (壁厚を尊重)。工事中は間柱「面」が写るため、
     中心線ICPより面ICPの方がスケールバイアスが出ない (0312で実証)"""
-    plan = load_labelme(ZUMEN_DIR / f"{floor}.json", floor)
+    plan = load_labelme(paths.floors / f"{floor}.json", floor)
     segs = []
     for r in plan.walls + plan.columns:
         if r.w >= r.h:
@@ -213,13 +212,13 @@ def segs_to_cells(segs_px, grid):
     return out
 
 
-def refine_island(tag, floor, gt):
+def refine_island(paths, tag, floor, gt):
     """密度v2再構築 → グリッド照合(align_floorplan) → ICP精密化 → GT評価"""
     import subprocess
     import sys
-    d_dir = PCD_DIR / tag
+    d_dir = paths.pcd / tag
     if not (d_dir / "align_summary.json").exists():
-        build_density2(tag)
+        build_density2(paths, tag)
         # グリッド照合は既存のalign_floorplanを density2 で流用するため一時リネーム
         (d_dir / "density.npz").rename(d_dir / "density_v1.npz") \
             if (d_dir / "density.npz").exists() else None
@@ -230,7 +229,7 @@ def refine_island(tag, floor, gt):
     d = dict(np.load(d_dir / "density.npz"))
     summ = json.loads((d_dir / "align_summary.json").read_text())
     best = summ["results"][floor]
-    grid = PlanGrid(floor)
+    grid = PlanGrid(paths, floor)
 
     mirror_col = None
     if best.get("mirror"):
@@ -243,7 +242,7 @@ def refine_island(tag, floor, gt):
     pts = density_wall_points(d)
     if len(pts) > 20000:
         pts = pts[:: len(pts) // 20000 + 1]
-    segs = segs_to_cells(wall_segments_px(floor), grid)
+    segs = segs_to_cells(wall_segments_px(paths, floor), grid)
 
     cam_cells = cams_to_cells(d)
     if mirror_col is not None:
@@ -256,11 +255,11 @@ def refine_island(tag, floor, gt):
                 for n, (x, y) in zip(d["names"], px)]
 
     print(f"--- {tag} ({floor}) grid init:")
-    evaluate_track(f"{tag} grid(v2density)", track(s, th, t), gt)
+    evaluate_track(paths, f"{tag} grid(v2density)", track(s, th, t), gt)
     s2, th2, t2, resid = icp_to_walls(pts, segs, s, th, t)
     print(f"ICP: s {s:.3f}->{s2:.3f}, θ {math.degrees(th):.1f}->"
           f"{math.degrees(th2):.1f}deg, wall resid {resid:.3f}m")
-    res = evaluate_track(f"{tag} ICP refined", track(s2, th2, t2), gt)
+    res = evaluate_track(paths, f"{tag} ICP refined", track(s2, th2, t2), gt)
     return {"tag": tag, "floor": floor, "s": s2, "th": th2,
             "t": t2.tolist(), "resid_m": resid, "eval": res,
             "grid": grid, "d": d, "params": (s2, th2, t2),
@@ -283,19 +282,20 @@ def fit_similarity(src, dst):
     return s, th, t
 
 
-def refine_chunks(floor, chunk_ids, chunks_dir, island_cam_cells, grid, gt):
+def refine_chunks(paths, floor, chunk_ids, chunks_dir, island_cam_cells,
+                  grid, gt):
     """改善2: チャンクごとにICP補正して島内ドリフトを吸収し、フレーム位置を集める
 
     island_cam_cells: {frame_name: plan cell (row,col)} 島の精密化変換による初期位置
     返り値: {frame: [(plan_cell, resid_m)]}
     """
-    segs = segs_to_cells(wall_segments_px(floor), grid)
+    segs = segs_to_cells(wall_segments_px(paths, floor), grid)
     frame_pos = {}
     for k in chunk_ids:
         tag = f"{chunks_dir}/chunk_{k:02d}"
-        d_dir = PCD_DIR / tag
+        d_dir = paths.pcd / tag
         if not (d_dir / "density2.npz").exists():
-            build_density2(tag)
+            build_density2(paths, tag)
         d = dict(np.load(d_dir / "density2.npz"))
         names = [str(n) for n in d["names"]]
         cam_cells = cams_to_cells(d)
@@ -329,13 +329,13 @@ ISLANDS = [("islandA{s}", "1F", range(0, 5)),
            ("islandC{s}", "1F", range(12, 13))]
 
 
-def run_full(masked, gt):
+def run_full(paths, masked, gt):
     sfx = "_m" if masked else ""
     chunks_dir = "chunks_masked" if masked else "chunks"
     assembled = {}
     for tag_t, floor, chunk_ids in ISLANDS:
         tag = tag_t.format(s=sfx)
-        res = refine_island(tag, floor, gt)
+        res = refine_island(paths, tag, floor, gt)
         # 島の精密化カメラ位置 (plan cell) を初期値にチャンク補正
         cam_cells = {}
         d = res["d"]
@@ -346,7 +346,7 @@ def run_full(masked, gt):
         for n, c in zip(d["names"], cells):
             cam_cells[str(n)] = c
         print(f"--- {tag} チャンク補正:")
-        frame_pos = refine_chunks(floor, chunk_ids, chunks_dir,
+        frame_pos = refine_chunks(paths, floor, chunk_ids, chunks_dir,
                                   cam_cells, res["grid"], gt)
         for fr, lst in frame_pos.items():
             cell = np.mean([c for c, _ in lst], axis=0)
@@ -361,13 +361,13 @@ def run_full(masked, gt):
     track = [dict((k, v) for k, v in t.items() if k != "_n")
              for t in sorted(assembled.values(), key=lambda x: x["frame"])]
     print("=== 全体軌跡 (チャンク補正済み) ===")
-    res = evaluate_track(f"assembled{'_masked' if masked else ''}", track, gt)
-    out = RESULTS_DIR / "eval_gt" / f"assembled{'_masked' if masked else ''}.json"
+    res = evaluate_track(paths, f"assembled{'_masked' if masked else ''}", track, gt)
+    out = paths.results / "eval_gt" / f"assembled{'_masked' if masked else ''}.json"
     out.write_text(json.dumps({"eval": res, "track": track}, indent=1))
     print(f"-> {out}")
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--island")
     ap.add_argument("--floor")
@@ -376,12 +376,9 @@ def main():
     ap.add_argument("--masked", action="store_true",
                     help="マスク付きチャンク(chunks_masked / island*_m)を使う")
     args = ap.parse_args()
-    gt = load_gt()
+    gt = load_gt(paths)
     if args.full:
-        run_full(args.masked, gt)
+        run_full(paths, args.masked, gt)
     else:
-        refine_island(args.island, args.floor, gt)
+        refine_island(paths, args.island, args.floor, gt)
 
-
-if __name__ == "__main__":
-    main()

@@ -22,10 +22,9 @@ from recon3d.core.geometry import (gravity_from_cameras,
                                      robust_yaw_median, rot_y,
                                      rotation_to_y)
 from recon3d.core.io_ply import read_ply_xyzrgb
-from recon3d.core.panovggt import PCD_DIR
 
-CHUNKS_DIR = PCD_DIR / "chunks_masked"   # --src で差し替え可
-OUT_ROOT = PCD_DIR / "chunks_yawfix"     # --out で差し替え可
+CHUNKS_SUB = "chunks_masked"   # --src で差し替え可
+OUT_SUB = "chunks_yawfix"      # --out で差し替え可
 FIX_DEG = 3.0     # 中央値からの逸脱がこれ超のフレームを修正
 DROP_DEG = 30.0   # これ超はポーズ全壊とみなし位置も信頼しない (実測: 逸脱62/82°の
                   # フレームは位置も1.5/2.6mずれる。≦16°なら位置は正常)
@@ -42,10 +41,8 @@ def chunk_yaw(poses):
     return phi, Rg
 
 
-def fix_chunk(name, src_root=None, out_root=None):
+def fix_chunk(name, src_root, out_root):
     """1チャンクを修正して out_root/name に書く。修正不要ならFalse"""
-    src_root = src_root or CHUNKS_DIR
-    out_root = out_root or OUT_ROOT
     src = src_root / name
     cams = np.load(src / "cameras.npz")
     poses = cams["poses"].copy()
@@ -102,15 +99,15 @@ def fix_chunk(name, src_root=None, out_root=None):
     return True, untrusted
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--chunks", default="0,1,2,3,4",
                     help="'0,1,2' か 'all' (srcの全chunk_*)")
-    ap.add_argument("--src", default=None, help="入力チャンク群 (PCD_DIR相対)")
-    ap.add_argument("--out", default=None, help="出力先 (PCD_DIR相対)")
-    args = ap.parse_args()
-    src_root = PCD_DIR / args.src if args.src else CHUNKS_DIR
-    out_root = PCD_DIR / args.out if args.out else OUT_ROOT
+    ap.add_argument("--src", default=None, help="入力チャンク群 (results/pcd 相対)")
+    ap.add_argument("--out", default=None, help="出力先 (results/pcd 相対)")
+    args = ap.parse_args(argv)
+    src_root = paths.pcd / (args.src or CHUNKS_SUB)
+    out_root = paths.pcd / (args.out or OUT_SUB)
     out_root.mkdir(parents=True, exist_ok=True)
     if args.chunks == "all":
         ids = [int(p.name.split("_")[1]) for p in sorted(src_root.glob("chunk_*"))]
@@ -133,6 +130,3 @@ def main():
     bad_path.write_text(json.dumps(all_bad, indent=1))
     print(f"-> {out_root} (untrusted: {sorted(all_bad)})")
 
-
-if __name__ == "__main__":
-    main()

@@ -57,7 +57,53 @@ def build_model(floor_paths, cfg, out_dir):
     return report
 
 
-def main():
+def floors_from_paths(paths):
+    """入力契約から (階名, JSONパス) を下階から順に返す
+
+    階名は数字でソートする。B1F は地下なので負、数字を持たない階名 (RF/PH)
+    は末尾へ (core/floor_assign.floor_names と同じ規則)。
+    """
+    def key(name):
+        d = "".join(c for c in name if c.isdigit())
+        if not d:
+            return (1, 0, name)
+        n = int(d)
+        return (0, -n if name.upper().startswith("B") else n, name)
+
+    # `meta.json` は図面ではなく実寸の覚え書き。`*.json.raw` 等の控えは
+    # suffix が .json にならないので glob の時点で外れる
+    cands = sorted((p for p in paths.floors.glob("*.json")
+                    if p.stem not in ("meta",) and not p.stem.startswith("_")),
+                   key=lambda p: key(p.stem))
+    if not cands:
+        raise SystemExit(f"間取り図のJSONが無い: {paths.floors}")
+    return [(p.stem, str(p)) for p in cands]
+
+
+def build_from_paths(paths, out_dir=None):
+    """入力契約から3Dモデルを作る (main.py plan2model build の実体)
+
+    `--floors` / `--width-mm` を手で並べる代わりに、`floors/*.json` と
+    `floors/meta.json` の `known_width_mm` から埋める。
+    """
+    floor_paths = floors_from_paths(paths)
+    kw = paths.known_width_mm
+    if kw is None:
+        raise SystemExit(
+            f"図面の実寸が未設定: {paths.floors / 'meta.json'} に "
+            '{"known_width_mm": 13877.5} を書いてください '
+            "(壁注釈だけでは px→m が決まらない)")
+    # 階でスパンが違う物件は辞書。校正は最下階の値を使う
+    if isinstance(kw, dict):
+        kw = kw.get(floor_paths[0][0]) or next(iter(kw.values()))
+    cfg = ReconConfig(known_width_mm=kw)
+    out = out_dir or (paths.results / "plan2model")
+    report = build_model(floor_paths, cfg, str(out))
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    return out
+
+
+def main(paths, argv=None):
     ap = argparse.ArgumentParser(description="平面図JSON→3Dモデル再構成")
     ap.add_argument("--floors", nargs="+", required=True,
                     help="下階から順に NAME=PATH (例: 1F=/code2/.../1F.json)")
@@ -66,12 +112,10 @@ def main():
     ap.add_argument("--depth-mm", type=float, default=9555.0,
                     help="通り芯 縦全幅mm(交差検証用)")
     ap.add_argument("--out", required=True)
-    args = ap.parse_args()
-    cfg = ReconConfig(known_width_mm=args.width_mm, known_depth_mm=args.depth_mm)
+    args = ap.parse_args(argv)
+    cfg = ReconConfig(known_width_mm=args.width_mm,
+                      known_depth_mm=args.depth_mm)
     floor_paths = [tuple(f.split("=", 1)) for f in args.floors]
     report = build_model(floor_paths, cfg, args.out)
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
-
-if __name__ == "__main__":
-    main()

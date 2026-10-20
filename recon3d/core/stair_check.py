@@ -10,7 +10,6 @@ stairnet(IMU)の見逃し(短い2F→3F等、0616/0925で実測)への保険。
 """
 import numpy as np
 
-from recon3d.config import BENCH_DIR
 from recon3d.core.geometry import rotation_to_y
 from recon3d.core.io_ply import read_ply_xyzrgb
 from recon3d.postproc.density_map import slab_peaks
@@ -21,9 +20,9 @@ EDGE_KEEP = 0.7       # 切断範囲 = |変位|がピークのこの倍率を超
 SMOOTH_K = 5
 
 
-def island_vertical(tag):
+def island_vertical(paths, tag):
     """島タグ → (フレーム昇順, 平滑化済み鉛直カメラ位置, カメラ高相当units)"""
-    d = np.load(BENCH_DIR / tag / "global_cameras.npz")
+    d = np.load(paths.bench / tag / "global_cameras.npz")
     names = [str(n) for n in d["names"]]
     frames = np.array([int(n.replace("frame_", "")) for n in names])
     order = np.argsort(frames)
@@ -34,7 +33,7 @@ def island_vertical(tag):
     up = np.median(ups / np.linalg.norm(ups, axis=1, keepdims=True), axis=0)
     rg = rotation_to_y(up / np.linalg.norm(up))
     y = (pos @ rg.T)[:, 1]
-    xyz, _ = read_ply_xyzrgb(BENCH_DIR / tag / "global_points.ply")
+    xyz, _ = read_ply_xyzrgb(paths.bench / tag / "global_points.ply")
     py = (xyz[::7] @ rg.T)[:, 1]
     peaks, _, _ = slab_peaks(py)
     cam = float(np.median(y))
@@ -91,9 +90,9 @@ def find_stair(frames, ys, h):
     return int(frames[a_i]), int(frames[b_i]), m / h, kind
 
 
-def check_island(tag):
+def check_island(paths, tag):
     """便宜関数: タグを検査して結果を表示。跨ぎがあれば切断範囲を返す"""
-    frames, ys, h = island_vertical(tag)
+    frames, ys, h = island_vertical(paths, tag)
     s = find_stair(frames, ys, h)
     span = float(ys.max() - ys.min())
     if s is None:
@@ -104,10 +103,25 @@ def check_island(tag):
     return s
 
 
-if __name__ == "__main__":
+def main(paths, argv=None):
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("tags", nargs="+")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     for t in args.tags:
-        check_island(t)
+        check_island(paths, t)
+
+
+def imu_stair_ranges(paths, pad=6):
+    """IMU検出の階段区間 [(a, b)]。無ければ空
+
+    かつては SESSION_CFG の手動注釈 (STAIR_ASCEND/DESCEND) を使っていたが、
+    セッションレジストリを廃したので本番と同じ出どころ
+    (imu/transitions.json) に一本化した。
+    """
+    import json
+    p = paths.imu / "transitions.json"
+    if not p.exists():
+        return []
+    return [(int(e["frame_start"]) - pad, int(e["frame_end"]) + pad)
+            for e in json.loads(p.read_text())["events"]]

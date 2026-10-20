@@ -1,6 +1,6 @@
-"""図面(GT labelme)のグリッド表現 PlanGrid と図面定数 (全系統共通)
+"""図面(labelme)のグリッド表現 PlanGrid (全系統共通)
 
-recon3dのGTパースと実測スケール校正を再利用し、壁+柱/開口の距離場カーネル、
+plan2model のGTパースと実測スケール校正を再利用し、壁+柱/開口の距離場カーネル、
 屋内自由空間 (valid_pose) を持つセルグリッドを作る。
 """
 import math
@@ -11,11 +11,6 @@ from scipy import ndimage
 from recon3d.plan2model.calibrate import scale_mm_per_px
 from recon3d.plan2model.loader import load_labelme
 
-from recon3d.config import PROP
-
-ZUMEN_DIR = PROP.zumen_dir
-KNOWN_WIDTH_MM = PROP.known_width_mm
-
 RES_M = 0.05            # グリッド解像度 (m/セル)
 SIGMA_WALL_M = 0.20     # 壁一致カーネル幅
 SIGMA_OPEN_M = 0.30     # 開口一致カーネル幅
@@ -23,11 +18,22 @@ MIN_WALL_CLEAR_M = 0.2  # カメラ位置は壁からこれ以上離れている
 
 
 class PlanGrid:
-    def __init__(self, floor_name):
-        plan = load_labelme(ZUMEN_DIR / f"{floor_name}.json", floor_name)
+    def __init__(self, paths, floor_name):
+        plan = load_labelme(paths.floors / f"{floor_name}.json", floor_name)
         self.name = floor_name
-        kw = (KNOWN_WIDTH_MM[floor_name]
-              if isinstance(KNOWN_WIDTH_MM, dict) else KNOWN_WIDTH_MM)
+        kw = paths.known_width_mm
+        if kw is None:
+            raise SystemExit(
+                f"図面の実寸が未設定なので {floor_name} をグリッド化できない。"
+                f'{paths.floors / "meta.json"} に '
+                '{"known_width_mm": 13877.5} を書いてください '
+                "(壁注釈だけでは px→m が決まらない)")
+        if isinstance(kw, dict):
+            kw = kw.get(floor_name)
+            if kw is None:
+                raise SystemExit(
+                    f"known_width_mm に階 {floor_name!r} が無い "
+                    f'({paths.floors / "meta.json"})')
         self.m_per_px = scale_mm_per_px(plan, kw) / 1000.0
 
         rects_wall = plan.walls + plan.columns

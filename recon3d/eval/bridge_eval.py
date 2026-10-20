@@ -33,18 +33,17 @@ from recon3d.eval.gt_traj import mm_per_px, load_gt
 # 壁注釈の無い物件 (ext/) は mm/px が出ないので、誤差は**図面幅で正規化**して
 # 返す (このデータセット本来の単位)。既存物件換算で 0.01 ≈ 0.30m
 # import時に評価しない (mm_per_px() は図面を読むので import の副作用にしない)
-def _m():
-    v = mm_per_px()
+def _m(paths):
+    v = mm_per_px(paths)
     return (v / 1000) if v else None
 
 
-def _unit():
+def _unit(paths):
     """px -> 表示単位の係数と単位名"""
-    from recon3d.config import PROP
-    m = _m()
+    m = _m(paths)
     if m:
         return m, "m"
-    return 1.0 / PROP.drawing_wh[0], "図面幅"
+    return 1.0 / paths.drawing_wh[0], "図面幅"
 
 
 def _sim2_fit(src, dst, refl=None):
@@ -81,9 +80,9 @@ def _apply2(T, pts):
     return np.stack([w.real, w.imag], axis=1) + cd
 
 
-def evaluate(a_end, b_start, mode, gt, horiz=(0, 2)):
+def evaluate(paths, a_end, b_start, mode, gt, horiz=(0, 2)):
     """橋1本を評価。(全体残差m, A側残差m, B側残差m, 使用枚数) を返す"""
-    pos = run_bridge(a_end, b_start, mode)
+    pos = run_bridge(paths, a_end, b_start, mode)
     frames = [f for f in sorted(pos) if f in gt]
     if len(frames) < 6:
         return None
@@ -96,7 +95,7 @@ def evaluate(a_end, b_start, mode, gt, horiz=(0, 2)):
     refl = Tall[3]
     r_a, _, Ta = _sim2_fit(src[ia], dst[ia], refl=refl)
     r_b, _, Tb = _sim2_fit(src[ib], dst[ib], refl=refl)
-    m = _unit()[0]
+    m = _unit(paths)[0]
     # **運ぶ誤差**: A側を正しく合わせた変換でB側を運んだときのGTとのずれ。
     # 「島Aが正しく図面に乗っているとき、橋で運んだ島Bがどれだけずれるか」
     # = パイプラインで実際に効く量。全体フィットは両側に誤差を分配するので
@@ -112,7 +111,7 @@ def evaluate(a_end, b_start, mode, gt, horiz=(0, 2)):
 
 
 
-def join_eval(a_end, b_start, mode, gt, horiz=(0, 2)):
+def join_eval(paths, a_end, b_start, mode, gt, horiz=(0, 2)):
     """橋で島Bを島Aの座標系へ移し、結合軌跡をGTと比べる (本命の評価)
 
     mode が "nNsM" 形式 (例 n8s2) ならチェーン端から選ぶ推奨経路を使う。
@@ -120,17 +119,17 @@ def join_eval(a_end, b_start, mode, gt, horiz=(0, 2)):
     from recon3d.core.bridge import (_chain_poses, fit_side,
                                        run_chain_bridge)
     from recon3d.core.geometry import apply as apply3
-    ma, mb = islands_at(a_end, b_start)
+    ma, mb = islands_at(paths, a_end, b_start)
     if ma is None:
         return None
-    ca, cb = _chain_poses(ma["tag"]), _chain_poses(mb["tag"])
+    ca, cb = _chain_poses(paths, ma["tag"]), _chain_poses(paths, mb["tag"])
     if mode.startswith("n") and "s" in mode:
         n, st = (int(v) for v in mode[1:].split("s"))
-        pos, af, bf_ = run_chain_bridge(ma["tag"], mb["tag"], n, st)
+        pos, af, bf_ = run_chain_bridge(paths, ma["tag"], mb["tag"], n, st)
         fa = fit_side(pos, ca, af)
         fb = fit_side(pos, cb, bf_)
     else:
-        pos = run_bridge(a_end, b_start, mode)
+        pos = run_bridge(paths, a_end, b_start, mode)
         bf = sorted(pos)
         mid = (a_end + b_start) / 2
         fa = fit_side(pos, ca, [f for f in bf if f <= mid])
@@ -172,14 +171,14 @@ def join_eval(a_end, b_start, mode, gt, horiz=(0, 2)):
                           np.stack([[gt[frames[i]]["x_px"],
                                      gt[frames[i]]["y_px"]] for i in nb_k]),
                           refl=refl)
-    m = _unit()[0]
+    m = _unit(paths)[0]
     return (r_join * m, (r_a or 0) * m, (r_b or 0) * m, resid_a, resid_b,
             ma["tag"], mb["tag"], len(keep))
 
 
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--modes", nargs="*", default=["ends", "span", "both"])
     ap.add_argument("--junction", help="a_end:b_start (省略時は全切れ目)")
@@ -187,37 +186,37 @@ def main():
                     help="島を橋で結合して結合軌跡をGTと比べる (本命)")
     ap.add_argument("--consensus", action="store_true",
                     help="方式間の一致度とGT誤差を並べる (採否判定の検証)")
-    args = ap.parse_args()
-    gt = load_gt()
+    args = ap.parse_args(argv)
+    gt = load_gt(paths)
     if args.junction:
         js = [tuple(int(v) for v in args.junction.split(":"))]
     elif args.consensus:
         # グループ化が実際に見る切れ目 = **島の隣接ペア**。IMU区間の切れ目だけ
         # 見ると --max-seg の分割 (連続フレームの人為的な分割) が漏れる。
         # 分割は視覚的な重なりがあるので、橋の難易度の対照群になる
-        man = manifest_islands()
+        man = manifest_islands(paths)
         js = [(A["b"], B["a"]) for A, B in zip(man, man[1:])]
     else:
-        js = junctions()
+        js = junctions(paths)
     if args.consensus:
         print(f"{'切れ目':>12s} {'種類':>5s} {'階':>8s} {'隙間':>5s} "
               f"{'一致度':>8s} {'最良GT':>8s} {'最悪GT':>8s}")
         for a, b in js:
             try:
-                c = consensus(a, b, args.modes)
+                c = consensus(paths, a, b, args.modes)
                 es = []
                 for m in args.modes:
-                    r = join_eval(a, b, m, gt)
+                    r = join_eval(paths, a, b, m, gt)
                     if r:
                         es.append(r[0])
             except Exception as e:
                 print(f"{a:5d}->{b:<5d}  失敗 ({type(e).__name__}: {e})")
                 continue
-            ma, mb = islands_at(a, b)
+            ma, mb = islands_at(paths, a, b)
             fl = (f"{ma['floor']}->{mb['floor']}" if ma is not None else "?")
             same = ("同一" if ma is not None and ma["floor"] == mb["floor"]
                     else "またぎ")
-            kind = junction_kind(a, b)
+            kind = junction_kind(paths, a, b)
             head = (f"{a:5d}->{b:<5d} {kind:>5s} {fl:>8s} "
                     f"{b - a - 1:4d}f {same}")
             if c is None or not es:
@@ -231,7 +230,7 @@ def main():
         for a, b in js:
             for mode in args.modes:
                 try:
-                    r = join_eval(a, b, mode, gt)
+                    r = join_eval(paths, a, b, mode, gt)
                 except Exception as e:
                     print(f"{a:5d}->{b:<5d} {mode:>6s}  失敗 "
                           f"({type(e).__name__}: {e})")
@@ -253,7 +252,7 @@ def main():
     for a, b in js:
         for mode in args.modes:
             try:
-                r = evaluate(a, b, mode, gt)
+                r = evaluate(paths, a, b, mode, gt)
             except Exception as e:
                 print(f"{a:5d}->{b:<5d} {mode:>5s}  失敗 ({type(e).__name__}: {e})")
                 continue
@@ -271,6 +270,3 @@ def main():
                   f"{r_a:6.2f}m {r_b:6.2f}m {sr:6.3f}  {mark} "
                   f"({n}枚 A{na}/B{nb})")
 
-
-if __name__ == "__main__":
-    main()

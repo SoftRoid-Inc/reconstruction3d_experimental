@@ -14,18 +14,13 @@ import os
 from pathlib import Path
 
 import numpy as np
+
+from recon3d.constants import GROUP_IDS
 from PIL import Image
 from scipy import ndimage
 
 from recon3d.core.io_ply import read_ply_xyzrgb
-from recon3d.config import (FRAMES_DIR, GROUP_IDS, PROP, RESULTS_DIR,
-                              frame_name)
 from recon3d.core.sample_frames import load_selected
-
-PCD_DIR = RESULTS_DIR / "pcd"
-INPUT_DIR = PCD_DIR / "input"
-MASK_DIR = PCD_DIR / "input_mask"
-PANOVGGT_OUT = PCD_DIR / "panovggt_out"
 
 PANOVGGT_CONFIG = os.environ.get("PANOVGGT_CONFIG",
                                  "training/config/default.yaml")
@@ -65,20 +60,19 @@ NADIR_INVALID_FRAC = 0.07  # 画像下端の無効帯 (自撮り棒・手元)
 MASK_WH = (2048, 1024)  # PanoVGGTに渡すマスク解像度 (seg結果と同じ)
 
 
-def build_mask(name):
+def build_mask(paths, name):
     """有効画素マスク(白=有効)を作る。
     物件に既存人物マスク(白=有効/黒=人物)があればそれを縮小して使い、
     無ければseg_ade20kのperson結果から作る。どちらも無ければNone"""
-    if PROP.person_mask_dir is not None:
+    if paths.masks is not None:
         num = int("".join(c for c in name if c.isdigit()))
-        p = PROP.person_mask_dir / frame_name(num)
+        p = paths.masks / paths.frame_name(num)
         if not p.exists():
             return None
         img = Image.open(p).convert("L").resize(MASK_WH, Image.BILINEAR)
         person = np.asarray(img) < 128
     else:
-        from recon3d.config import SEG_DIR
-        npz = SEG_DIR / f"{name}_labels.npz"
+        npz = paths.seg / f"{name}_labels.npz"
         if not npz.exists():
             return None
         labels = np.load(npz)["labels"]
@@ -90,20 +84,20 @@ def build_mask(name):
     return (valid * 255).astype(np.uint8)
 
 
-def select_entries(frames_spec):
+def select_entries(paths, frames_spec):
     """frames_spec 'start:end:step' 指定があれば連続レンジ、無ければ代表フレーム"""
     if frames_spec is None:
-        return load_selected()
+        return load_selected(paths)
     start, end, step = (int(v) for v in frames_spec.split(":"))
     entries = []
     for i in range(start, end, step):
-        p = FRAMES_DIR / frame_name(i)
+        p = paths.images / paths.frame_name(i)
         if p.exists():
             entries.append({"index": i, "path": str(p)})
     return entries
 
 
-def prepare_inputs(entries, input_dir, mask_dir, use_mask=True):
+def prepare_inputs(paths, entries, input_dir, mask_dir, use_mask=True):
     input_dir.mkdir(parents=True, exist_ok=True)
     mask_dir.mkdir(parents=True, exist_ok=True)
     names = []
@@ -114,7 +108,7 @@ def prepare_inputs(entries, input_dir, mask_dir, use_mask=True):
         dst = input_dir / f"{name}.jpg"
         if not dst.exists():
             dst.symlink_to(entry["path"])
-        mask = build_mask(name) if use_mask else None
+        mask = build_mask(paths, name) if use_mask else None
         if mask is not None:
             Image.fromarray(mask).save(mask_dir / f"{name}.png")
             n_masks += 1
@@ -145,12 +139,13 @@ def _infer(chunks):
     run_spec(chunks, pdir, PANOVGGT_CONFIG, ckpt)
 
 
-def run_panovggt(entries, out_dir, use_mask=True):
+def run_panovggt(paths, entries, out_dir, use_mask=True):
     """フレーム集合に対してPanoVGGT推論を実行し、out_dir に標準形式で保存する"""
     input_dir = out_dir / "input"
     mask_dir = out_dir / "input_mask"
     vggt_out = out_dir / "panovggt_out"
-    names, n_masks = prepare_inputs(entries, input_dir, mask_dir, use_mask)
+    names, n_masks = prepare_inputs(paths, entries, input_dir, mask_dir,
+                                    use_mask)
     print(f"{len(names)} frames prepared -> {out_dir}")
 
     _infer([{"image_dir": str(input_dir),
@@ -179,7 +174,7 @@ def run_panovggt(entries, out_dir, use_mask=True):
     print(json.dumps(stats, indent=2))
 
 
-def run_chunks(windows, entries, chunks_dir, use_mask=True):
+def run_chunks(paths, windows, entries, chunks_dir, use_mask=True):
     """複数チャンクをまとめて推論する (モデル読み込みは1回)
 
     windows: [(k, a, b)] — k=チャンク番号、[a:b) がフレーム範囲。
@@ -189,11 +184,11 @@ def run_chunks(windows, entries, chunks_dir, use_mask=True):
     """
     todo, names_of = [], {}
     for k, a, b in windows:
-        cdir = PCD_DIR / chunks_dir / f"chunk_{k:02d}"
+        cdir = paths.pcd / chunks_dir / f"chunk_{k:02d}"
         if (cdir / "cameras.npz").exists():
             continue
         cdir.mkdir(parents=True, exist_ok=True)
-        names, n_masks = prepare_inputs(entries[a:b], cdir / "input",
+        names, n_masks = prepare_inputs(paths, entries[a:b], cdir / "input",
                                         cdir / "input_mask", use_mask)
         names_of[k] = names
         todo.append({"image_dir": str(cdir / "input"),
@@ -206,7 +201,7 @@ def run_chunks(windows, entries, chunks_dir, use_mask=True):
     _infer(todo)
     for k, a, b in windows:
         if k in names_of:
-            _collect(PCD_DIR / chunks_dir / f"chunk_{k:02d}", names_of[k])
+            _collect(paths.pcd / chunks_dir / f"chunk_{k:02d}", names_of[k])
 
 
 def _collect(out_dir, names):
@@ -224,7 +219,7 @@ def _collect(out_dir, names):
         "bbox_max": xyz.max(axis=0).tolist()}, indent=2))
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--frames", default=None,
                     help="'start:end:step' の連続レンジ。省略時は代表16フレーム")
@@ -233,11 +228,8 @@ def main():
     ap.add_argument("--no-mask", action="store_true")
     args = ap.parse_args()
 
-    out_dir = PCD_DIR / args.tag if args.tag else PCD_DIR
+    out_dir = paths.pcd / args.tag if args.tag else paths.pcd
     out_dir.mkdir(parents=True, exist_ok=True)
-    entries = select_entries(args.frames)
-    run_panovggt(entries, out_dir, use_mask=not args.no_mask)
+    entries = select_entries(paths, args.frames)
+    run_panovggt(paths, entries, out_dir, use_mask=not args.no_mask)
 
-
-if __name__ == "__main__":
-    main()

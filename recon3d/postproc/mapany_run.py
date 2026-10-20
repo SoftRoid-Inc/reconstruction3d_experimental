@@ -6,9 +6,7 @@
 import argparse
 
 
-def run_mapany(manifest, session_ref=None):
-    from recon3d.config import SESSION_REF
-    session_ref = session_ref or SESSION_REF
+def run_mapany(paths, manifest):
     try:
         import mapanything  # noqa: F401
         in_container = True
@@ -20,13 +18,13 @@ def run_mapany(manifest, session_ref=None):
         stride = max(1, -(-n // 56))      # 1チャンク56ビューが16GBの上限
         if in_container:
             from recon3d.postproc.mapany import run_infer
-            run_infer(argparse.Namespace(
+            run_infer(paths, argparse.Namespace(
                 tag=mtag, floor=m["floor"], frames=f"{m['a']}:{m['b']}",
                 stride=stride, minibatch=1, yaws="0", res=None,
                 pose_cond=m["tag"], dump_local=False, nc=False))
         else:
             print(f"[mapany] コンテナ外。次を実行してください:\n"
-                  f"  docker compose exec -e IMG_SESSION={session_ref} "
+                  f"  docker compose exec -e RECON_INPUT={paths.root} "
                   f"-e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True "
                   f"mapanything python -m recon3d.postproc.mapany infer "
                   f"--tag {mtag} --floor {m['floor']} "

@@ -1,5 +1,6 @@
-# cubicasaコンテナへの追加依存 (docker compose exec cubicasa pip install -r ...)
-# 既存ピン (numpy1.24.4/scipy1.9.3/shapely1.8.5/matplotlib<3.9) を壊さないこと
+# recon3d イメージに入っている (reconstruction_3d/Dockerfile)。
+# 別のコンテナで動かすときの参照用。既存ピン
+# (numpy1.24.4/scipy1.9.3/shapely1.8.5/matplotlib<3.9) を壊さないこと
 trimesh
-mapbox_earcut
+mapbox_earcut   # trimesh の三角形分割エンジン。非FSFの triangle は使わない
 pytest

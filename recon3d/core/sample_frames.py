@@ -3,20 +3,20 @@ import json
 
 import numpy as np
 
-from recon3d.config import FRAMES_DIR, NUM_SAMPLE_FRAMES, RESULTS_DIR
+from recon3d.constants import NUM_SAMPLE_FRAMES
 
 
-def sample_frames():
-    frames = sorted(FRAMES_DIR.glob("frame_number_*.jpg"))
+def sample_frames(paths):
+    frames = sorted(paths.images.glob("frame_number_*.jpg"))
     if not frames:
-        raise FileNotFoundError(f"no frames in {FRAMES_DIR}")
+        raise FileNotFoundError(f"no frames in {paths.images}")
     idx = np.unique(
         np.linspace(0, len(frames) - 1, NUM_SAMPLE_FRAMES).round().astype(int)
     )
     selected = [{"index": int(i), "path": str(frames[i])} for i in idx]
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out = RESULTS_DIR / "frames.json"
+    paths.results.mkdir(parents=True, exist_ok=True)
+    out = paths.results / "frames.json"
     out.write_text(json.dumps(
         {"total_frames": len(frames), "selected": selected},
         indent=2,
@@ -24,13 +24,6 @@ def sample_frames():
     return selected
 
 
-def load_selected():
-    data = json.loads((RESULTS_DIR / "frames.json").read_text())
+def load_selected(paths):
+    data = json.loads((paths.results / "frames.json").read_text())
     return data["selected"]
-
-
-if __name__ == "__main__":
-    sel = sample_frames()
-    print(f"selected {len(sel)} frames -> {RESULTS_DIR / 'frames.json'}")
-    for s in sel:
-        print(f"  [{s['index']:4d}] {s['path']}")

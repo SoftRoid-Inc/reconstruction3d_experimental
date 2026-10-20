@@ -25,7 +25,6 @@ import json
 import numpy as np
 from PIL import Image
 
-from recon3d.config import BENCH_DIR, PROP, SESSION
 from recon3d.core.geometry import rotation_to_y
 from recon3d.eval.chunk_cmp import gt_interp
 from recon3d.eval.frontend import fit2d
@@ -38,9 +37,9 @@ COLORS = {"pv": "#1f77b4", "pi3": "#2ca02c", "holo": "#d62728"}
 LABEL = {"pv": "PanoVGGT", "pi3": "Pi3", "holo": "Pi3-FT(Holo360D)"}
 
 
-def island_xy(tag):
+def island_xy(paths, tag):
     """島の global_cameras.npz → (frames, 重力で水平化した平面座標)"""
-    d = np.load(BENCH_DIR / tag / "global_cameras.npz")
+    d = np.load(paths.bench / tag / "global_cameras.npz")
     fr = np.array([int(str(n).replace("frame_", "")) for n in d["names"]])
     poses = d["poses"]
     u = poses[:, :3, 1]
@@ -49,14 +48,14 @@ def island_xy(tag):
     return fr, p[:, [0, 2]]
 
 
-def fit_island_px(tag, gt):
+def fit_island_px(paths, tag, gt):
     """島をGTへ相似フィット → (図面px軌跡, GT残差[m])。GT不足ならNone
 
     フィットはメートルで行い、最後にpxへ戻す。鏡像は系の取り方で反転しうる
     ので両方試して残差の小さい方を採る。
     """
-    fr, p = island_xy(tag)
-    g, idx = gt_interp(gt, fr, mm_per_px())
+    fr, p = island_xy(paths, tag)
+    g, idx = gt_interp(gt, fr, mm_per_px(paths))
     if len(idx) < 4:
         return None
     best = None
@@ -67,7 +66,7 @@ def fit_island_px(tag, gt):
         e = np.linalg.norm(T(x[idx]) - g, axis=1)
         if best is None or np.median(e) < np.median(best[1]):
             best = (T(x), e)
-    return best[0] / (mm_per_px() / 1000), best[1]
+    return best[0] / (mm_per_px(paths) / 1000), best[1]
 
 
 def floor_of(info, gt):
@@ -78,21 +77,21 @@ def floor_of(info, gt):
     return max(set(fl), key=fl.count) if fl else None
 
 
-def gt_track(gt, floor):
+def gt_track(paths, gt, floor):
     """その階のGT軌跡 (px) と各点の直前からの速度 [m/s]"""
     g = [(f, v) for f, v in sorted(gt.items()) if v["floor"] == floor]
     xy = np.array([[v["x_px"], v["y_px"]] for _, v in g])
     fr = np.array([f for f, _ in g])
-    d = np.linalg.norm(np.diff(xy, axis=0), axis=1) * mm_per_px() / 1000
+    d = np.linalg.norm(np.diff(xy, axis=0), axis=1) * mm_per_px(paths) / 1000
     return xy, np.r_[np.nan, d / (np.diff(fr) * DT)]
 
 
-def draw_plan(ax, floor, gt):
+def draw_plan(paths, ax, floor, gt):
     """図面背景 + GT軌跡 + 表示範囲"""
-    bg = np.asarray(Image.open(PROP.zumen_dir / f"{floor}.jpg").convert("L"))
+    bg = np.asarray(Image.open(paths.floors / f"{floor}.jpg").convert("L"))
     # 図面は寸法線・注記が密なので薄く敷く (軌跡を主役にする)
     ax.imshow(bg, cmap="gray", vmin=0, vmax=255, alpha=0.38, zorder=0)
-    xy, vel = gt_track(gt, floor)
+    xy, vel = gt_track(paths, gt, floor)
     ax.plot(xy[:, 0], xy[:, 1], "-", color="k", lw=4.0, alpha=0.3,
             label="GT", zorder=1)
     bad = vel > WALK_MAX
@@ -106,11 +105,11 @@ def draw_plan(ax, floor, gt):
     ax.set_axis_off()
 
 
-def draw_model(ax, model, islands, gt):
+def draw_model(paths, ax, model, islands, gt):
     """1モデル分の島をまとめて描く → GT残差のリスト"""
     errs, first = [], True
     for info in islands:
-        r = fit_island_px(info["tag"], gt)
+        r = fit_island_px(paths, info["tag"], gt)
         if r is None:
             continue
         xy, err = r
@@ -122,22 +121,22 @@ def draw_model(ax, model, islands, gt):
     return errs
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--models", nargs="*", default=["pv", "pi3", "holo"])
     ap.add_argument("--floors", nargs="*", default=None)
     ap.add_argument("--manifest", default="{model}_gtseg_manifest.json",
                     help="島台帳のファイル名パターン")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     matplotlib.rcParams["font.family"] = ["Noto Sans CJK JP", "DejaVu Sans"]
 
-    gt = load_gt()
+    gt = load_gt(paths)
     mans = {}
     for m in args.models:
-        p = BENCH_DIR / args.manifest.format(model=m)
+        p = paths.bench / args.manifest.format(model=m)
         if p.exists():
             mans[m] = json.loads(p.read_text())
         else:
@@ -150,26 +149,23 @@ def main():
     summary = {}
     for floor in floors:
         fig, ax = plt.subplots(figsize=(13, 9))
-        draw_plan(ax, floor, gt)
+        draw_plan(paths, ax, floor, gt)
         stats = {}
         for m in args.models:
             isl = [i for i in mans.get(m, []) if floor_of(i, gt) == floor]
             if isl:
-                stats[m] = draw_model(ax, m, isl, gt)
+                stats[m] = draw_model(paths, ax, m, isl, gt)
         ax.legend(fontsize=9, loc="upper right", framealpha=0.85)
         s = "   ".join(f"{LABEL[m]} {np.median(v):.3f}"
                        for m, v in stats.items() if len(v))
-        ax.set_title(f"{SESSION} {floor} — GT残差 median [m]:   {s}",
+        ax.set_title(f"{paths.name} {floor} — GT残差 median [m]:   {s}",
                      fontsize=11)
-        out = BENCH_DIR / f"floor_overlay_{floor}.png"
+        out = paths.bench / f"floor_overlay_{floor}.png"
         fig.savefig(out, dpi=140, bbox_inches="tight")
         plt.close(fig)
         summary[floor] = {m: round(float(np.median(v)), 3)
                           for m, v in stats.items() if len(v)}
         print(f"-> {out}  {summary[floor]}")
-    (BENCH_DIR / "floor_overlay.json").write_text(
+    (paths.bench / "floor_overlay.json").write_text(
         json.dumps(summary, indent=1, ensure_ascii=False))
 
-
-if __name__ == "__main__":
-    main()

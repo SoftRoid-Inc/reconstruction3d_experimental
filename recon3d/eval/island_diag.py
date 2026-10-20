@@ -24,25 +24,23 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from recon3d.config import BENCH_DIR, RESULTS_DIR
 from recon3d.core.geometry import rotation_to_y
 from recon3d.eval.frontend import fit2d
 from recon3d.eval.gt_traj import mm_per_px, load_gt
 
 # 壁注釈の無い物件 (ext/) は mm/px が出ない。その場合は**図面幅で正規化**した
 # 単位で診断する (比率や形は単位に依らないので診断の価値は変わらない)
-def _scale():
-    if mm_per_px():
-        return mm_per_px() / 1000, "m"
-    from recon3d.config import PROP
-    return 1.0 / PROP.drawing_wh[0], "図面幅"
+def _scale(paths):
+    if mm_per_px(paths):
+        return mm_per_px(paths) / 1000, "m"
+    return 1.0 / paths.drawing_wh[0], "図面幅"
 
 WIN = 10          # 局所スケール/方位を測る窓 (フレーム)
 
 
-def load_fit(tag, gt):
+def load_fit(paths, tag, gt):
     """島をGTへ相似フィットし、(frames, 推定xy, GT xy, 誤差) を返す"""
-    d = np.load(BENCH_DIR / tag / "global_cameras.npz")
+    d = np.load(paths.bench / tag / "global_cameras.npz")
     names = [str(n) for n in d["names"]]
     fr = np.array([int(n.replace("frame_", "")) for n in names])
     o = np.argsort(fr)
@@ -54,8 +52,8 @@ def load_fit(tag, gt):
     for i, f in enumerate(fr):
         g = min(gt, key=lambda k: abs(k - f))
         if abs(g - f) <= 3:
-            gxy.append([gt[g]["x_px"] * _scale()[0],
-                        gt[g]["y_px"] * _scale()[0]])
+            gxy.append([gt[g]["x_px"] * _scale(paths)[0],
+                        gt[g]["y_px"] * _scale(paths)[0]])
             used.append(i)
     gxy = np.array(gxy)
     best = None
@@ -70,18 +68,17 @@ def load_fit(tag, gt):
     return fr[used], best[1], gxy, best[2]
 
 
-def chunk_bounds(tag):
+def chunk_bounds(paths, tag):
     """島が使ったチャンクのフレーム境界 (manifest + chunk_windows から)"""
     from recon3d.core.chunking import chunk_windows
-    from recon3d.config import FRAMES_DIR
-    man_p = BENCH_DIR / "pv_manifest.json"
+    man_p = paths.bench / "pv_manifest.json"
     if not man_p.exists():
         return []
     man = json.loads(man_p.read_text())
     m = next((m for m in man if m["tag"] == tag), None)
     if m is None:
         return []
-    n = len(sorted(FRAMES_DIR.glob("frame_number_*.jpg")))
+    n = len(sorted(paths.images.glob("frame_number_*.jpg")))
     w = chunk_windows(n)
     return [w[k] for k in m["chunks"]]
 
@@ -147,14 +144,14 @@ def classify(err, jumps, anom):
     return "健全 (特定箇所に集中せず、局所量も正常域)"
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag", required=True)
     ap.add_argument("--win", type=int, default=WIN)
-    args = ap.parse_args()
-    gt = load_gt()
-    fr, est, gxy, err = load_fit(args.tag, gt)
-    bounds = chunk_bounds(args.tag)
+    args = ap.parse_args(argv)
+    gt = load_gt(paths)
+    fr, est, gxy, err = load_fit(paths, args.tag, gt)
+    bounds = chunk_bounds(paths, args.tag)
     starts = sorted({b[0] for b in bounds} | {b[1] for b in bounds})
 
     # チャンク境界をまたぐ誤差ジャンプ
@@ -202,12 +199,9 @@ def main():
             a.axvline(b, color="0.85", lw=0.8, zorder=0)
     ax[2].set_xlabel("frame")
     fig.tight_layout()
-    fig.savefig(BENCH_DIR / f"diag_{args.tag}.png", dpi=110)
+    fig.savefig(paths.bench / f"diag_{args.tag}.png", dpi=110)
     plt.close(fig)
-    (BENCH_DIR / f"diag_{args.tag}.json").write_text(
+    (paths.bench / f"diag_{args.tag}.json").write_text(
         json.dumps(res, ensure_ascii=False, indent=1))
-    print(f"-> {BENCH_DIR / f'diag_{args.tag}.png'}")
+    print(f"-> {paths.bench / f'diag_{args.tag}.png'}")
 
-
-if __name__ == "__main__":
-    main()

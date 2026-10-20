@@ -19,7 +19,12 @@ from typing import Callable, Optional, Tuple
 
 @dataclass
 class Ctx:
-    """ステップ間で受け渡す状態 (オプションと、いま対象にしている島の集合)"""
+    """ステップ間で受け渡す状態
+
+    `paths` が「どのデータセットか」を持つ唯一の場所。環境変数も
+    モジュール凍結も使わず、ここから各段へ引数で配る。
+    """
+    paths: object = None
     opt: dict = field(default_factory=dict)
     manifest: Optional[list] = None     # 島 or 群れのマニフェスト
     chunks_dir: Optional[str] = None
@@ -50,16 +55,15 @@ class Step:
 
 # --------------------------------------------------------------- 各ステップ
 def _prep(ctx):
-    from recon3d.config import PROP, SEG_DIR
     from recon3d.core.ingest import materialize_imu
-    materialize_imu()
-    if PROP.person_mask_dir is None and not SEG_DIR.exists():
+    materialize_imu(ctx.paths)
+    if ctx.paths.masks is None and not ctx.paths.seg.exists():
         print("[prep] 人物マスクなし (person_mask_dir/seg未生成) — "
               "マスク無しで続行。必要なら seg_ade20k を実行")
     # mapany はピンホールクロップを食うので、選ばれていれば自動で作る
     if ctx.get("chunking.crops") or "mapany" in ctx.order:
         from recon3d.core.crops import generate
-        generate(tag="mapany_f130")
+        generate(ctx.paths, tag="mapany_f130")
 
 
 def _chains(ctx):
@@ -92,7 +96,8 @@ def _chains(ctx):
                   manifest_out=manifest_out,
                   use_idle=ctx.get("chunking.use_idle", True),
                   model=model, chunk_size=chunk_size)
-    manifest = run_batch(chunks_dir=ctx.chunks_dir, tag_suffix=var, **common)
+    manifest = run_batch(ctx.paths, chunks_dir=ctx.chunks_dir,
+                         tag_suffix=var, **common)
 
     if ctx.get("chunking.yaw_fix"):
         manifest = _yaw_fix_rechain(ctx, common, var)
@@ -100,17 +105,16 @@ def _chains(ctx):
     if segments == "imu":
         from recon3d.core.chunking import stair_remerge, stair_resplit
         # IMU見逃し(短い階段)の保険: 幾何検査で跨ぎ島を自動再分割
-        manifest = stair_resplit(manifest, chunks_dir=ctx.chunks_dir,
+        manifest = stair_resplit(ctx.paths, manifest, chunks_dir=ctx.chunks_dir,
                                  manifest_out=manifest_out, stride=stride)
         # IMU過検出(はしご等)の偽切断を癒合してカバーを回復
-        manifest = stair_remerge(manifest, chunks_dir=ctx.chunks_dir,
+        manifest = stair_remerge(ctx.paths, manifest, chunks_dir=ctx.chunks_dir,
                                  manifest_out=manifest_out, stride=stride,
                                  max_seg=max_seg, model=model)
         # IMU区間は階ラベルを持たない。手動割当があれば流し込む
         from recon3d.core.floor_assign import apply as apply_floors
-        from recon3d.config import BENCH_DIR
-        manifest = apply_floors(manifest)
-        (BENCH_DIR / manifest_out).write_text(json.dumps(manifest, indent=1))
+        manifest = apply_floors(ctx.paths, manifest)
+        (ctx.paths.bench / manifest_out).write_text(json.dumps(manifest, indent=1))
     ctx.manifest = manifest
 
 
@@ -121,11 +125,10 @@ def _yaw_fix_rechain(ctx, common, var):
     stride / chunk_size / model / manifest_out / タグ接尾辞が全部抜けて
     いた (既定条件のチェーンを上書きしてしまう)。
     """
-    from recon3d.config import RESULTS_DIR
     from recon3d.core.chunking import run_batch
     from recon3d.postproc.yaw_fix import fix_chunk
-    src = RESULTS_DIR / "pcd" / ctx.chunks_dir
-    out = RESULTS_DIR / "pcd" / f"{ctx.chunks_dir}_yawfix"
+    src = ctx.paths.results / "pcd" / ctx.chunks_dir
+    out = ctx.paths.results / "pcd" / f"{ctx.chunks_dir}_yawfix"
     out.mkdir(parents=True, exist_ok=True)
     for c in sorted(src.glob("chunk_*")):
         fixed, _ = fix_chunk(c.name, src, out)
@@ -134,8 +137,8 @@ def _yaw_fix_rechain(ctx, common, var):
     print("[yaw_fix] 済 → チェーンを修正チャンクで再実行")
     ctx.chunks_dir = f"{ctx.chunks_dir}_yawfix"
     ctx.tag_suffix = f"{var}_yawfix"
-    return run_batch(chunks_dir=ctx.chunks_dir, tag_suffix=ctx.tag_suffix,
-                     **common)
+    return run_batch(ctx.paths, chunks_dir=ctx.chunks_dir,
+                     tag_suffix=ctx.tag_suffix, **common)
 
 
 def _posegraph(ctx):
@@ -148,9 +151,8 @@ def _posegraph(ctx):
     """
     import json as _json
 
-    from recon3d.config import BENCH_DIR, RESULTS_DIR
     from recon3d.core.posegraph import YAW_W, run as pg_run
-    pcd = RESULTS_DIR / "pcd" / ctx.chunks_dir
+    pcd = ctx.paths.results / "pcd" / ctx.chunks_dir
     prefix = ctx.get("posegraph.prefix", "pg_")
     yaw_w = ctx.get("posegraph.yaw_w", YAW_W)
     loops = ctx.get("posegraph.loops", True)
@@ -159,7 +161,7 @@ def _posegraph(ctx):
         tag = prefix + m["tag"]
         cdirs = [pcd / f"chunk_{k:02d}" for k in m["chunks"]]
         try:
-            pg_run(cdirs, tag, yaw_w, loops=loops)
+            pg_run(ctx.paths, cdirs, tag, yaw_w, loops=loops)
         except Exception as e:                      # noqa: BLE001
             print(f"[posegraph] {m['tag']}: 失敗 ({type(e).__name__}: {e})"
                   " -> 逐次連結のまま")
@@ -167,59 +169,56 @@ def _posegraph(ctx):
             continue
         out.append({**m, "tag": tag, "from_tag": m["tag"]})
     name = "pg_manifest.json"
-    (BENCH_DIR / name).write_text(_json.dumps(out, ensure_ascii=False,
+    (ctx.paths.bench / name).write_text(_json.dumps(out, ensure_ascii=False,
                                               indent=1))
     ctx.manifest = out
     # 以降の段 (bridge の islands_at 等も含む) が同じマニフェストを読むよう
     # 差し替える。揃えないと「群れ化はPG、橋の両側判定は逐次」になる
     ctx.opt.setdefault("chunking", {})["manifest_out"] = name
-    print(f"[posegraph] {len(out)}島 -> {BENCH_DIR / name}")
+    print(f"[posegraph] {len(out)}島 -> {ctx.paths.bench / name}")
 
 
 def _eval(ctx):
-    from recon3d.config import BENCH_DIR
     from recon3d.eval.frontend import evaluate
     from recon3d.eval.gt_traj import load_gt
-    gt = load_gt()
-    res = [evaluate(m["tag"], gt) for m in ctx.manifest]
-    (BENCH_DIR / "compare.json").write_text(json.dumps(res, indent=1))
+    gt = load_gt(ctx.paths)
+    res = [evaluate(ctx.paths, m["tag"], gt) for m in ctx.manifest]
+    (ctx.paths.bench / "compare.json").write_text(json.dumps(res, indent=1))
 
 
 def _mapany(ctx):
     from recon3d.postproc.mapany_run import run_mapany
-    run_mapany(ctx.manifest)
+    run_mapany(ctx.paths, ctx.manifest)
 
 
 def _interp(ctx):
-    from recon3d.config import BENCH_DIR
     from recon3d.postproc.interp import interp
     for m in ctx.manifest:
         ma = m["tag"].replace("pv", "macond", 1)
-        if (BENCH_DIR / ma / "global_cameras.npz").exists():
-            interp(m["tag"], ma, m["tag"].replace("pv", "maf", 1))
+        if (ctx.paths.bench / ma / "global_cameras.npz").exists():
+            interp(ctx.paths, m["tag"], ma, m["tag"].replace("pv", "maf", 1))
         else:
             print(f"[interp] {ma} なし -> skip")
 
 
 def _bridge(ctx):
     """橋渡しで島を群れにまとめる。以降のステップは**群れ**を対象にする"""
-    from recon3d.config import BENCH_DIR
     from recon3d.core.island_group import (CONSENSUS_OK_M, MODES,
                                              build_groups, group_manifest)
-    groups = build_groups(list(ctx.get("bridge.modes") or MODES),
+    groups = build_groups(ctx.paths, list(ctx.get("bridge.modes") or MODES),
                           ctx.get("bridge.thresh", CONSENSUS_OK_M),
                           ctx.get("bridge.skip_cross_floor", False),
                           manifest_name=ctx.get("chunking.manifest_out"))
     print(f"[bridge] {len(groups)}群れ " +
           " / ".join(f"{len(g)}島" for g, _ in groups))
-    ctx.manifest = group_manifest(groups)
-    (BENCH_DIR / "pv_group_manifest.json").write_text(
+    ctx.manifest = group_manifest(ctx.paths, groups)
+    (ctx.paths.bench / "pv_group_manifest.json").write_text(
         json.dumps(ctx.manifest, ensure_ascii=False, indent=1))
 
 
 def _anchor(ctx):
     from recon3d.postproc.anchor_run import anchor_islands
-    anchor_islands(ctx.manifest, jobs=ctx.get("anchor.jobs"))
+    anchor_islands(ctx.paths, ctx.manifest, jobs=ctx.get("anchor.jobs"))
 
 
 def _hier(ctx):
@@ -229,7 +228,6 @@ def _hier(ctx):
     長島分割は親 island を残さないので、本番経路 (segments=imu) では
     対象ゼロになるのが正常。
     """
-    from recon3d.config import OUT_DIR
     from recon3d.postproc.hier_anchor import hier_anchor
     targets = [m for m in ctx.manifest if m.get("parent")]
     if not targets:
@@ -237,35 +235,35 @@ def _hier(ctx):
               "(--max-seg 分割では親島が作られないので正常)")
         return
     for m in targets:
-        if (OUT_DIR / f"anchor_{m['tag']}_corners.json").exists():
+        if (ctx.paths.backend / f"anchor_{m['tag']}_corners.json").exists():
             continue        # 直接アンカーが成功した島は触らない
-        tp = OUT_DIR / f"corner_anchor_{m['parent']}.json"
+        tp = ctx.paths.backend / f"corner_anchor_{m['parent']}.json"
         if not tp.exists():
             print(f"[hier] {m['tag']}: 親 {m['parent']} のアンカーなし -> skip")
             continue
         try:
-            hier_anchor(m["tag"], m["floor"], json.loads(tp.read_text()))
+            hier_anchor(ctx.paths, m["tag"], m["floor"],
+                        json.loads(tp.read_text()))
         except Exception as e:                      # noqa: BLE001
             print(f"[hier] {m['tag']}: 失敗 ({e})")
 
 
 def _export(ctx):
-    from recon3d.config import OUT_DIR, SESSION
     from recon3d.out.export import export
     z_off = {"1F": 0.0, "2F": 2.9, "3F": 5.8}
     islands = []
     for m in ctx.manifest:
         for sfx in ("_corners", "_hier", ""):
-            if (OUT_DIR / f"anchor_{m['tag']}{sfx}.json").exists():
+            if (ctx.paths.backend / f"anchor_{m['tag']}{sfx}.json").exists():
                 islands.append((m["tag"], z_off.get(m["floor"], 0.0), sfx))
                 break
     if not islands:
         print("[export] アンカー済み島なし -> skip")
         return
-    export(islands=islands, out_name=f"aligned_house_{SESSION}_auto.ply")
+    export(ctx.paths, islands, f"aligned_house_{ctx.paths.name}_auto.ply")
     if ctx.get("export.viewer"):
         from recon3d.out.viewer import main as viz
-        viz(f"_{SESSION}_auto")
+        viz(ctx.paths, f"_{ctx.paths.name}_auto")
 
 
 # ------------------------------------------------------------------ 登録表
@@ -321,7 +319,7 @@ def resolve(selected):
     return order
 
 
-def plan(selected, caps=None, strict=True):
+def plan(paths, selected, caps=None, strict=True):
     """実行順と、能力不足で skip するステップの理由を返す
 
     明示的に選ばれたステップが能力不足なら**止める** (strict=True)。自動で
@@ -329,7 +327,7 @@ def plan(selected, caps=None, strict=True):
     動く等)。`strict=False` は点検用 — 止めずに skip 扱いで報告する。
     """
     from recon3d.core import caps as caps_mod
-    caps = caps if caps is not None else caps_mod.detect()
+    caps = caps if caps is not None else caps_mod.detect(paths)
     order = resolve(selected)
     run, skip = [], {}
     for s in order:
@@ -349,12 +347,13 @@ def plan(selected, caps=None, strict=True):
     return run, skip
 
 
-def execute(selected, opt=None):
+def execute(paths, selected, opt=None):
     """前提を補って順に実行し、Ctx を返す"""
     from recon3d.core import caps as caps_mod
-    caps = caps_mod.detect()
-    order, skip = plan(selected, caps)
-    ctx = Ctx(opt=dict(opt or {}), caps=caps, order=tuple(order),
+    caps = caps_mod.detect(paths)
+    order, skip = plan(paths, selected, caps)
+    ctx = Ctx(paths=paths, opt=dict(opt or {}), caps=caps,
+              order=tuple(order),
               skipped=skip)
     for s, why in skip.items():
         print(f"[skip] {s}: {why}")
@@ -379,26 +378,3 @@ def describe():
         out.append(f"{s.name:{w}}  {s.doc}{dep}{cap}")
     out.append(f"\n既定: {' '.join(DEFAULT_STEPS)}")
     return out
-
-
-def main(argv=None):
-    """`argv` を渡さなければコマンドラインから取る
-
-    **呼び出し側から使うときは必ず `argv` を渡すこと。** `pipeline stages`
-    が `sys.argv` をそのまま拾って「未知のステップ: ['stages']」を出していた。
-    """
-    import sys
-    if argv is None:
-        argv = sys.argv[1:]
-    sel = [a for a in argv if not a.startswith("-")]
-    if not sel:
-        print("\n".join(describe()))
-        return
-    run, skip = plan(sel)
-    print("実行順:", " -> ".join(run))
-    for k, v in skip.items():
-        print(f"skip {k}: {v}")
-
-
-if __name__ == "__main__":
-    main()

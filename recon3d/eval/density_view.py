@@ -23,14 +23,13 @@ import json
 
 import numpy as np
 
-from recon3d.config import BENCH_DIR, OUT_DIR, SESSION
 from recon3d.postproc.anchor import prepare_island
 from recon3d.postproc.corners import DENS_THR, density_corners
 
 
-def island_density(tag):
+def island_density(paths, tag):
     """(density地図, コーナー一覧, カメラ軌跡[セル], 支配方位deg)"""
-    d = prepare_island(tag)
+    d = prepare_island(paths, tag)
     zz, xx = np.nonzero(d["density"] > DENS_THR)
     cs, deg = density_corners(np.stack([zz, xx], axis=1).astype(np.float64))
     cam = np.stack(
@@ -40,17 +39,17 @@ def island_density(tag):
     return d["density"], cs, cam, deg
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default="pv_full_manifest.json")
     ap.add_argument("--islands", nargs="*", default=None)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     matplotlib.rcParams["font.family"] = ["Noto Sans CJK JP", "DejaVu Sans"]
 
-    man = json.loads((BENCH_DIR / args.manifest).read_text())
+    man = json.loads((paths.bench / args.manifest).read_text())
     tags = [m for m in man
             if not args.islands or m["tag"] in args.islands]
     n = len(tags)
@@ -60,7 +59,7 @@ def main():
                              squeeze=False)
     for ax, m in zip(axes.ravel(), tags):
         try:
-            dens, cs, cam, deg = island_density(m["tag"])
+            dens, cs, cam, deg = island_density(paths, m["tag"])
         except Exception as e:
             ax.set_title(f"{m['tag']}: 失敗 ({type(e).__name__})", fontsize=9)
             ax.axis("off")
@@ -80,13 +79,10 @@ def main():
         ax.tick_params(labelsize=6)
     for ax in axes.ravel()[n:]:
         ax.axis("off")
-    fig.suptitle(f"{SESSION} 島ごとの壁密度地図 "
+    fig.suptitle(f"{paths.name} 島ごとの壁密度地図 "
                  f"(濃い=壁 / 赤=検出コーナー / 青=カメラ軌跡)", fontsize=12)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
-    out = OUT_DIR / "density_islands.png"
+    out = paths.backend / "density_islands.png"
     fig.savefig(out, dpi=130)
     print(f"-> {out}")
 
-
-if __name__ == "__main__":
-    main()

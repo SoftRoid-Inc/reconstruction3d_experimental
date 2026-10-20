@@ -22,171 +22,34 @@ from pathlib import Path
 
 import numpy as np
 
-from recon3d.config import BENCH_DIR
 from recon3d.core.chaining import chain
 from recon3d.core.geometry import apply
 from recon3d.postproc.colmap_prior import colmap_centers, fit_chunk_to_colmap
-from recon3d.config import PROJECT_ROOT, RESULTS_DIR, SESSION
 from recon3d.eval.gt_traj import mm_per_px
 from recon3d.core.plan_grid import RES_M, PlanGrid
 from recon3d.postproc.plan_icp import transform_pts
 
-OUT_DIR = BENCH_DIR.parent / "backend"
-SFX = "" if SESSION == "0828" else f"_{SESSION}"
-
-# 島レジストリ: 図面座標へのアンカーと、その島を構成するチャンク群。
-# mode: "colmap"=チャンクごとに独立してCOLMAPへSim(3)フィット (colmap_prior由来)
-#       "chain"=隣接チャンクの重なりICPで連結 (chain_chunks由来)
-ISLANDS = {
-    "0312": [
-        {"tag": "cm0312_1F", "floor": "1F", "z_off": 0.0, "mode": "colmap",
-         "root": "pcd/chunks",
-         "chunks": list(range(0, 10)) + [20, 21],
-         "anchor": "anchor_cm0312_1F_face.json"},
-        {"tag": "cm0312_2F", "floor": "2F", "z_off": 2.9, "mode": "colmap",
-         "root": "pcd/chunks", "chunks": list(range(11, 20)),
-         "anchor": "anchor_cm0312_2F_face.json"},
-    ],
-    "19176": [
-        # アンカー島 (colmap_prior) は屋内チャンクのみで構築。
-        # マスク生成用の chunks は階段・屋外も含む全カバレッジ
-        # (境界判定は水平位置のみなので、階段フレームの island 帰属は任意)
-        {"tag": "cm19176_1F", "floor": "1F", "z_off": 0.0, "mode": "colmap",
-         "root": "pcd/chunks",
-         "chunks": list(range(0, 7)) + list(range(13, 18)),
-         "anchor": "anchor_cm19176_1F.json"},
-        {"tag": "cm19176_2F", "floor": "2F", "z_off": 2.9, "mode": "colmap",
-         "root": "pcd/chunks",
-         "chunks": list(range(7, 13)),
-         "anchor": "anchor_cm19176_2F.json"},
-    ],
-    "0428": [
-        # 28-BBBBB 基礎工事段階: 建物なし・単一レベル。アンカーは軌跡外周↔境界
-        # リングのフィット (boundary_mask anchor-traj)
-        {"tag": "cm0428_ALL", "floor": "1F", "z_off": 0.0, "mode": "colmap",
-         "root": "pcd/chunks", "chunks": list(range(0, 31)),
-         "anchor": "anchor_cm0428_ALL.json"},
-    ],
-    "0616": [
-        # 28-BBBBB 建方後 (3フロア)。アンカー島は屋内クリーンチャンクのみ、
-        # マスク用chunksは階段・出入り込みの全カバレッジ
-        {"tag": "cm0616_1F", "floor": "1F", "z_off": 0.0, "mode": "colmap",
-         "root": "pcd/chunks",
-         "chunks": list(range(0, 13)) + list(range(31, 34)),
-         "anchor": "anchor_cm0616_1F.json"},
-        {"tag": "cm0616_2F", "floor": "2F", "z_off": 2.9, "mode": "colmap",
-         "root": "pcd/chunks", "chunks": list(range(13, 24)),
-         "anchor": "anchor_cm0616_2F.json"},
-        {"tag": "cm0616_3F", "floor": "3F", "z_off": 5.8, "mode": "colmap",
-         "root": "pcd/chunks", "chunks": list(range(24, 31)),
-         "anchor": "anchor_cm0616_3F.json"},
-    ],
-    "0715": [
-        {"tag": "cm0715_1F", "floor": "1F", "z_off": 0.0, "mode": "colmap",
-         "root": "pcd/chunks",
-         "chunks": list(range(0, 11)) + list(range(29, 35)),
-         "anchor": "anchor_cm0715_1F.json"},
-        {"tag": "cm0715_2F", "floor": "2F", "z_off": 2.9, "mode": "colmap",
-         "root": "pcd/chunks", "chunks": list(range(11, 21)),
-         "anchor": "anchor_cm0715_2F.json"},
-        {"tag": "cm0715_3F", "floor": "3F", "z_off": 5.8, "mode": "colmap",
-         "root": "pcd/chunks", "chunks": list(range(21, 29)),
-         "anchor": "anchor_cm0715_3F.json"},
-    ],
-    "0912": [
-        {"tag": "cm0912_1F", "floor": "1F", "z_off": 0.0, "mode": "colmap",
-         "root": "pcd/chunks",
-         "chunks": list(range(0, 22)) + [61, 62],
-         "anchor": "anchor_cm0912_1F_corners.json"},
-        {"tag": "cm0912_2F", "floor": "2F", "z_off": 2.9, "mode": "colmap",
-         "root": "pcd/chunks", "chunks": list(range(22, 44)),
-         "anchor": "anchor_cm0912_2F.json"},
-        {"tag": "cm0912_3F", "floor": "3F", "z_off": 5.8, "mode": "colmap",
-         "root": "pcd/chunks", "chunks": list(range(44, 61)),
-         "anchor": "anchor_cm0912_3F.json"},
-    ],
-    # 0925: 竣工間際1378枚。生COLMAP中心を直接使う (大域BA済みで形状が正しい)。
-    # metric-rescale (ステップ再積分) は形状を歪めるため不採用 (131-280の外周ループが
-    # 室内へ引き込まれた)。COLMAPのスケールドリフトが残る場合は island を短く分割して対処
-    # 0925: 竣工間際1378枚。COLMAP自体に実スケールドリフト (~2倍、屋内前半vs後半で実測)
-    # + PanoVGGT屋外スケール誤り (~3倍) があり、単一相似では合わない。
-    # → スケールがほぼ一定の区間でサブ島分割し、align_tool で島ごとに手動登録する。
-    # metric-rescale (ステップ再積分) は屋外でPanoVGGT誤りを取り込み形状を歪めるため不採用
-    "0925": [
-        {"tag": "cm0925_1Fa", "floor": "1F", "z_off": 0.0, "mode": "colmap",
-         "root": "pcd/chunks", "chunks": list(range(0, 10)),
-         "anchor": "anchor_cm0925_1Fa.json"},
-        {"tag": "cm0925_1Fout", "floor": "1F", "z_off": 0.0, "mode": "colmap",
-         "root": "pcd/chunks", "chunks": list(range(10, 24)),
-         "anchor": "anchor_cm0925_1Fout.json"},
-        {"tag": "cm0925_1Fb", "floor": "1F", "z_off": 0.0, "mode": "colmap",
-         "root": "pcd/chunks", "chunks": list(range(24, 40)),
-         "anchor": "anchor_cm0925_1Fb.json"},
-        {"tag": "cm0925_1Fc", "floor": "1F", "z_off": 0.0, "mode": "colmap",
-         "root": "pcd/chunks", "chunks": list(range(40, 60)),
-         "anchor": "anchor_cm0925_1Fc.json"},
-        {"tag": "cm0925_2Fa", "floor": "2F", "z_off": 2.9, "mode": "colmap",
-         "root": "pcd/chunks", "chunks": list(range(60, 76)),
-         "anchor": "anchor_cm0925_2Fa.json"},
-        {"tag": "cm0925_2Fb", "floor": "2F", "z_off": 2.9, "mode": "colmap",
-         "root": "pcd/chunks", "chunks": list(range(76, 92)),
-         "anchor": "anchor_cm0925_2Fb.json"},
-        {"tag": "cm0925_3F", "floor": "3F", "z_off": 5.8, "mode": "colmap",
-         "root": "pcd/chunks", "chunks": list(range(92, 107)),
-         "anchor": "anchor_cm0925_3F.json"},
-        {"tag": "cm0925_1Fend", "floor": "1F", "z_off": 0.0, "mode": "colmap",
-         "root": "pcd/chunks", "chunks": list(range(107, 115)),
-         "anchor": "anchor_cm0925_1Fend.json"},
-    ],
-    "0828": [
-        {"tag": "panovggt_A_yawfix", "floor": "1F", "z_off": 0.0,
-         "mode": "chain", "root": "pcd/chunks_yawfix",
-         "chunks": list(range(0, 6)),
-         "anchor": "anchor_panovggt_A_yawfix_rays.json"},
-        {"tag": "panovggt_Bcore_yawfix", "floor": "2F", "z_off": 2.9,
-         "mode": "chain", "root": "pcd/chunks_yawfix",
-         "chunks": list(range(6, 11)),
-         "anchor": "anchor_panovggt_Bcore_yawfix_rays.json"},
-        {"tag": "panovggt_C_full", "floor": "1F", "z_off": 0.0,
-         "mode": "chain", "root": "pcd/chunks_full_yawfix",
-         "chunks": [35, 36, 37],
-         "anchor": "anchor_panovggt_C_full_rays.json"},
-    ],
-}
-COLMAP_MODEL = {
-    "0312": PROJECT_ROOT / "28-AAAAA" / "video_data" / "0312"
-    / "colmap_coarse" / "0",
-    "19176": PROJECT_ROOT / "28-CCCCC" / "sfm" / "colmap_coarse" / "0",
-    "0428": PROJECT_ROOT / "28-BBBBB" / "0428" / "sfm" / "colmap_coarse" / "0",
-    "0616": PROJECT_ROOT / "28-BBBBB" / "0616" / "sfm" / "colmap_coarse" / "0",
-    "0715": PROJECT_ROOT / "28-BBBBB" / "0715" / "sfm" / "colmap_coarse" / "0",
-    "0912": PROJECT_ROOT / "28-BBBBB" / "0912" / "sfm" / "colmap_coarse" / "0",
-    "0925": PROJECT_ROOT / "28-BBBBB" / "0925" / "sfm" / "colmap_coarse" / "0",
-}
 SNAP_MAX_M = 0.25      # COLMAP中心への吸着ずれ上限 (超えたらそのフレームを捨てる)
 
 
 # ---------------------------------------------------------------- 島の土台
 
-def islands_for(session):
-    """セッションの島定義。results/<sess>/backend/islands.json があれば
-    それを優先する (動的編集用の逃げ道)。無ければ静的な ISLANDS レジストリ"""
-    from recon3d.config import PROPERTY
-    prop = PROPERTY.get(session)
-    if prop is not None:
-        p = prop.root / "results" / session / "backend" / "islands.json"
-        if p.exists():
-            return json.loads(p.read_text())
-    if session not in ISLANDS:
+def islands_for(paths):
+    """島定義。`results/backend/islands.json` から読む
+
+    かつてはセッション名で引く静的レジストリ (ISLANDS) を併用していたが、
+    セッションという概念を廃したので入力側のファイル一本にした。
+    """
+    p = paths.backend / "islands.json"
+    if not p.exists():
         raise SystemExit(
-            f"セッション '{session}' の島定義が無い。"
-            f"results/{session}/backend/islands.json を置くか、"
-            "meshing.ISLANDS に足してください "
-            f"(静的レジストリ: {sorted(ISLANDS)})")
-    return ISLANDS[session]
+            f"島定義が無い: {p}\n"
+            "  アンカー済みの島を [{tag, floor, chunks, anchor}, …] の形で"
+            "書いてください")
+    return json.loads(p.read_text())
 
 
-def islands_expanded(session):
+def islands_expanded(paths):
     """islands_for の各島を、アンカーの "segments" で仮想島に展開する。
 
     "segments" は align_tool の区間微調整が書く: チャンク範囲ごとに別の
@@ -194,10 +57,9 @@ def islands_expanded(session):
     同じ形の辞書なので resolve_frames / drawing_matrix はそのまま使え、
     セグメントごとに正しいスケールkと図面変換Mが出る。
     アンカー未存在 (未登録) や mode!=colmap の島は展開せずそのまま返す"""
-    from recon3d.config import PROPERTY
-    backend = PROPERTY[session].root / "results" / session / "backend"
+    backend = paths.backend
     out = []
-    for isl in islands_for(session):
+    for isl in islands_for(paths):
         segs = None
         p = backend / isl["anchor"]
         if isl.get("mode") == "colmap" and p.exists():
@@ -227,18 +89,18 @@ def anchor_transform_cells(cells, anchor):
                          np.array(anchor["t"]))
 
 
-def island_scale(anchor, grid):
+def island_scale(paths, anchor, grid):
     """島world単位 → メートル の一様スケール k (水平=鉛直)。
 
     1セルの実メートルは階ごとに異なる (2Fは図面のmm/pxが違い0.04m/セル)ので
     RES_M固定ではなく grid.cell_px から実測値を使う
     """
-    m_per_cell = grid.cell_px * mm_per_px() / 1000
+    m_per_cell = grid.cell_px * mm_per_px(paths) / 1000
     return anchor_scale(anchor) * m_per_cell / anchor["cell_units"]
 
 
-def load_anchor(isl):
-    return json.loads((OUT_DIR / isl["anchor"]).read_text())
+def load_anchor(paths, isl):
+    return json.loads((paths.backend / isl["anchor"]).read_text())
 
 
 def load_chunk_light(cdir):
@@ -250,7 +112,7 @@ def load_chunk_light(cdir):
     return names, cams["positions"], cams["poses"], untrusted
 
 
-def island_to_drawing_pts(pts, anchor, grid, z_off):
+def island_to_drawing_pts(paths, pts, anchor, grid, z_off):
     """島world座標 → 図面メートル座標 (export_aligned2.export と同一の手順)"""
     p = np.asarray(pts, dtype=np.float64) @ np.array(anchor["R_align"]).T
     p = p.copy()
@@ -261,15 +123,15 @@ def island_to_drawing_pts(pts, anchor, grid, z_off):
     if anchor["mirror_col"] is not None:
         cells[:, 1] = anchor["mirror_col"] - cells[:, 1]
     pc = anchor_transform_cells(cells, anchor)
-    xm = (grid.x0_px + pc[:, 1] * grid.cell_px) * mm_per_px() / 1000
-    ym = (grid.y0_px + pc[:, 0] * grid.cell_px) * mm_per_px() / 1000
-    mpu_z = island_scale(anchor, grid)
+    xm = (grid.x0_px + pc[:, 1] * grid.cell_px) * mm_per_px(paths) / 1000
+    ym = (grid.y0_px + pc[:, 0] * grid.cell_px) * mm_per_px(paths) / 1000
+    mpu_z = island_scale(paths, anchor, grid)
     floor_ref = anchor.get("floor_phys_y_units", anchor["floor_y_units"])
     h = (floor_ref - p[:, 1]) * mpu_z + z_off
     return np.stack([xm, ym, h], axis=1)
 
 
-def drawing_matrix(anchor, grid, z_off, metric_input=False):
+def drawing_matrix(paths, anchor, grid, z_off, metric_input=False):
     """島world → 図面メートル の4x4を数値的に求める (手計算せず実変換にフィット)。
 
     metric_input=True なら入力が「島座標をkでメートル化したもの」であるとして、
@@ -277,9 +139,9 @@ def drawing_matrix(anchor, grid, z_off, metric_input=False):
     """
     rng = np.random.default_rng(0)
     src = rng.normal(scale=5.0, size=(12, 3))
-    dst = island_to_drawing_pts(src, anchor, grid, z_off)
+    dst = island_to_drawing_pts(paths, src, anchor, grid, z_off)
     if metric_input:
-        src = src * island_scale(anchor, grid)
+        src = src * island_scale(paths, anchor, grid)
     A = np.hstack([src, np.ones((len(src), 1))])
     sol, *_ = np.linalg.lstsq(A, dst, rcond=None)   # (4,3)
     M = np.eye(4)
@@ -300,17 +162,17 @@ def apply_matrix(M, pts):
 
 # ---------------------------------------------------------------- ポーズ解決
 
-def resolve_frames(isl, verbose=True):
+def resolve_frames(paths, isl, verbose=True):
     """島を構成する全フレームの (chunk_dir, name, R_world, t_world_m, depth_scale)
 
     - R_world/t_world_m は「島座標をメートル化した系」でのcam2world
     - depth_scale は生の深度(単位)→メートル の係数 (= s_k * k)
     - 重複フレームは先勝ち、untrustedは除外、COLMAP吸着の外れフレームも除外
     """
-    root = RESULTS_DIR / isl["root"]
+    root = paths.results / isl["root"]
     cdirs = [root / f"chunk_{k:02d}" for k in isl["chunks"]]
-    anchor = load_anchor(isl)
-    k = island_scale(anchor, PlanGrid(isl["floor"]))
+    anchor = load_anchor(paths, isl)
+    k = island_scale(paths, anchor, PlanGrid(paths, isl["floor"]))
 
     out, seen = [], set()
     n_skip_dup = n_skip_bad = n_skip_snap = 0
@@ -318,12 +180,13 @@ def resolve_frames(isl, verbose=True):
         if isl["mode"] == "island":
             # 島自身の補正済みゲージ (colmap_prior --metric-rescale の出力) に
             # チャンクをフィットする。COLMAPスケールドリフトの大きい長尺用
-            d = np.load(RESULTS_DIR / "frontend_bench" / isl["tag"]
+            d = np.load(paths.results / "frontend_bench" / isl["tag"]
                         / "global_cameras.npz")
             centers = {int(str(n).replace("frame_", "")): p
                        for n, p in zip(d["names"], d["positions"])}
         else:
-            centers, _ = colmap_centers(COLMAP_MODEL[SESSION])
+            centers, _ = colmap_centers(
+                paths.root / "sfm" / "colmap_coarse" / "0")
         for cdir in cdirs:
             names, pos, poses, untrusted = load_chunk_light(cdir)
             T, resid, n_match = fit_chunk_to_colmap(names, pos, centers)
@@ -352,7 +215,7 @@ def resolve_frames(isl, verbose=True):
                             "t_m": t_world * k, "depth_scale": s_k * k})
     else:
         from recon3d.core.chaining import load_chunk
-        chunks, T_list, _ = chain(cdirs)
+        chunks, T_list, _ = chain(paths, cdirs)
         for ci, cdir in enumerate(cdirs):
             names, pos, poses, _, untrusted = chunks[ci]
             s_k, R_k, t_k = T_list[ci]
@@ -380,7 +243,9 @@ def resolve_frames(isl, verbose=True):
 FACE_S = 272          # 面の解像度 (equirectの0.347°/pxに整合)
 FACE_F = 128.0        # 焦点距離 → ±46.7° (90°+パディング。継ぎ目の穴を防ぐ)
 FACE_C = 136.0
-DEPTH_TRUNC = {"0828": 6.0, "0312": 7.0, "19176": 7.0}
+# 奥行き打ち切り[m]。広い物件ほど伸ばす (実測: 0828=6.0 / 0312・19176=7.0)。
+# --depth-trunc で上書きできる
+DEPTH_TRUNC_M = 7.0
 DEPTH_MIN_M = 0.3
 VOXEL = 0.025
 SDF_TRUNC = 0.075     # 間仕切り壁(厚0.10-0.12m)の表裏が融合しない範囲で最大
@@ -451,7 +316,7 @@ def clean_equirect_depth(d_m):
     return out
 
 
-def frame_faces(fr, luts, depth_trunc):
+def frame_faces(paths, fr, luts, depth_trunc):
     """1フレーム分の (面名, depth(S,S)float32[m], color(S,S,3)uint8) を返す"""
     from recon3d.core.io_ply import read_ply_xyzrgb
     cdir = fr["chunk_dir"]
@@ -487,24 +352,25 @@ def frame_faces(fr, luts, depth_trunc):
     return out
 
 
-def integrate_island(isl, limit=None, verbose=True):
+def integrate_island(paths, isl, limit=None, verbose=True,
+                     depth_trunc=None):
     """島のTSDFボリュームを構築して (mesh, anchor, grid, stats) を返す"""
     import open3d as o3d
-    frames, anchor = resolve_frames(isl, verbose=verbose)
+    frames, anchor = resolve_frames(paths, isl, verbose=verbose)
     if limit:
         frames = frames[:limit]
-    grid = PlanGrid(isl["floor"])
+    grid = PlanGrid(paths, isl["floor"])
     luts = build_face_luts(1036, 518)
     intr = o3d.camera.PinholeCameraIntrinsic(FACE_S, FACE_S, FACE_F, FACE_F,
                                              FACE_C, FACE_C)
     vol = o3d.pipelines.integration.ScalableTSDFVolume(
         voxel_length=VOXEL, sdf_trunc=SDF_TRUNC,
         color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8)
-    trunc = DEPTH_TRUNC[SESSION]
+    trunc = depth_trunc or DEPTH_TRUNC_M
     n_int = 0
     for idx, fr in enumerate(frames):
         cam2world = np.eye(4)
-        for fname, dep, col_img, R in frame_faces(fr, luts, trunc):
+        for fname, dep, col_img, R in frame_faces(paths, fr, luts, trunc):
             cam2world[:3, :3] = fr["R"] @ R
             cam2world[:3, 3] = fr["t_m"]
             rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
@@ -523,9 +389,9 @@ def integrate_island(isl, limit=None, verbose=True):
     return mesh, anchor, grid, {"frames": len(frames), "faces": n_int}
 
 
-def mesh_to_drawing(mesh, anchor, grid, z_off):
+def mesh_to_drawing(paths, mesh, anchor, grid, z_off):
     """島メートル座標のメッシュを図面座標へ (反射なら巻き順反転)"""
-    M, info = drawing_matrix(anchor, grid, z_off, metric_input=True)
+    M, info = drawing_matrix(paths, anchor, grid, z_off, metric_input=True)
     v = np.asarray(mesh.vertices)
     mesh.vertices = type(mesh.vertices)(apply_matrix(M, v))
     if info["det"] < 0:
@@ -559,13 +425,13 @@ def clean_mesh(mesh, min_tris=500, min_diag=0.30):
 
 # ---------------------------------------------------------------- 検証
 
-def cmd_verify(args):
+def cmd_verify(paths, args):
     """土台の健全性チェック: 4x4の一致と、ポーズ解決の既存実装との突き合わせ"""
-    for isl in islands_expanded(SESSION):
-        anchor = load_anchor(isl)
-        grid = PlanGrid(isl["floor"])
-        M, info = drawing_matrix(anchor, grid, isl["z_off"])
-        Mm, info_m = drawing_matrix(anchor, grid, isl["z_off"],
+    for isl in islands_expanded(paths):
+        anchor = load_anchor(paths, isl)
+        grid = PlanGrid(paths, isl["floor"])
+        M, info = drawing_matrix(paths, anchor, grid, isl["z_off"])
+        Mm, info_m = drawing_matrix(paths, anchor, grid, isl["z_off"],
                                     metric_input=True)
         print(f"\n--- {isl['tag']} ({isl['floor']}, z_off={isl['z_off']})")
         print(f"  4x4(units): resid {info['fit_resid_m']:.2e}m "
@@ -577,11 +443,11 @@ def cmd_verify(args):
         # 既存の点群書き出しと一致するか (ランダム点で)
         rng = np.random.default_rng(1)
         pts = rng.normal(scale=4.0, size=(5, 3))
-        ref = island_to_drawing_pts(pts, anchor, grid, isl["z_off"])
+        ref = island_to_drawing_pts(paths, pts, anchor, grid, isl["z_off"])
         got = apply_matrix(M, pts)
         print(f"  export_aligned2 整合: max {np.abs(ref-got).max():.2e} m")
 
-        frames, _ = resolve_frames(isl)
+        frames, _ = resolve_frames(paths, isl)
         # 既存の軌跡(アンカー適用後のカメラ位置)と一致するか
         cams_m = np.stack([f["t_m"] for f in frames])
         cams_draw = apply_matrix(Mm, cams_m)
@@ -592,14 +458,14 @@ def cmd_verify(args):
               f"(チャンク毎に変動)")
 
 
-def cmd_poisson(args):
+def cmd_poisson(paths, args):
     """Poisson表面再構成 (精製版): 法線の向きを軌跡カメラで決めてから再構成"""
     import open3d as o3d
     from scipy.spatial import cKDTree
 
     from recon3d.mesh.collision_mesh import CURTAIN_COLORS, PLY_NAME
     from recon3d.core.io_ply import read_ply_xyzrgb
-    xyz, rgb = read_ply_xyzrgb(OUT_DIR / PLY_NAME[SESSION])
+    xyz, rgb = read_ply_xyzrgb(paths.backend / PLY_NAME[paths.name])
     keep = np.ones(len(xyz), bool)
     for c in CURTAIN_COLORS:          # export時の合成カーテン点を除去
         keep &= ~np.all(rgb == np.array(c, np.uint8), axis=1)
@@ -616,10 +482,10 @@ def cmd_poisson(args):
     # (consistent_tangent_plane は屋内の閉空間で向きが破綻しやすい)
     pc.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(0.10, 30))
     cams = []
-    for isl in islands_expanded(SESSION):
-        frames, anchor = resolve_frames(isl, verbose=False)
-        grid = PlanGrid(isl["floor"])
-        M, _ = drawing_matrix(anchor, grid, isl["z_off"], metric_input=True)
+    for isl in islands_expanded(paths):
+        frames, anchor = resolve_frames(paths, isl, verbose=False)
+        grid = PlanGrid(paths, isl["floor"])
+        M, _ = drawing_matrix(paths, anchor, grid, isl["z_off"], metric_input=True)
         cams.append(apply_matrix(M, np.stack([f["t_m"] for f in frames])))
     cams = np.concatenate(cams)
     pts = np.asarray(pc.points)
@@ -641,26 +507,26 @@ def cmd_poisson(args):
     if args.target and len(mesh.triangles) > args.target:
         mesh = mesh.simplify_quadric_decimation(args.target)
     mesh.compute_vertex_normals()
-    out = OUT_DIR / f"mesh_poisson{SFX}.ply"
+    out = paths.backend / f"mesh_poisson.ply"
     o3d.io.write_triangle_mesh(str(out), mesh, write_ascii=False,
                                compressed=True)
-    (OUT_DIR / f"mesh_poisson{SFX}.json").write_text(json.dumps(
-        {"session": SESSION, "voxel": args.voxel, "depth": args.depth,
+    (paths.backend / f"mesh_poisson.json").write_text(json.dumps(
+        {"session": paths.name, "voxel": args.voxel, "depth": args.depth,
          "verts": len(mesh.vertices), "tris": len(mesh.triangles)}, indent=1))
     print(f"-> {out} ({len(mesh.vertices):,} verts / "
           f"{len(mesh.triangles):,} tris, 小成分 {n_drop:,} 除去)")
 
 
-def cmd_gate1(args):
+def cmd_gate1(paths, args):
     """ゲート1: 1フレームだけ積分し、そのフレームの点群(メートル島座標)と照合する。
 
     放射→z変換・面回転・LUTのラップ・チャンク毎スケールの誤りを一発で検出する
     """
     import open3d as o3d
     from recon3d.core.io_ply import read_ply_xyzrgb
-    isl = islands_expanded(SESSION)[0]
-    mesh, anchor, grid, _ = integrate_island(isl, limit=1, verbose=True)
-    fr = resolve_frames(isl, verbose=False)[0][0]
+    isl = islands_expanded(paths)[0]
+    mesh, anchor, grid, _ = integrate_island(paths, isl, limit=1, verbose=True)
+    fr = resolve_frames(paths, isl, verbose=False)[0][0]
     xyz, _ = read_ply_xyzrgb(fr["chunk_dir"] / "panovggt_out" / "pointclouds"
                              / "per_frame" / f"{fr['name']}.ply")
     # カメラローカル点群 → メートル島座標
@@ -675,13 +541,13 @@ def cmd_gate1(args):
     print("PASS" if np.median(d) < VOXEL else "FAIL")
 
 
-def cmd_tsdf(args):
+def cmd_tsdf(paths, args):
     import open3d as o3d
     meshes, stats = [], []
-    for isl in islands_expanded(SESSION):
+    for isl in islands_expanded(paths):
         print(f"\n=== {isl['tag']}")
-        mesh, anchor, grid, st = integrate_island(isl, limit=args.limit)
-        mesh, info = mesh_to_drawing(mesh, anchor, grid, isl["z_off"])
+        mesh, anchor, grid, st = integrate_island(paths, isl, limit=args.limit)
+        mesh, info = mesh_to_drawing(paths, mesh, anchor, grid, isl["z_off"])
         # 高さクロップ (これが無いと隣接階のジオメトリが漏れる)
         v = np.asarray(mesh.vertices)
         lo, hi = isl["z_off"] - 0.3, isl["z_off"] + 3.0
@@ -693,7 +559,7 @@ def cmd_tsdf(args):
         print(f"  -> {len(mesh.vertices):,} verts / {len(mesh.triangles):,} tris "
               f"(小成分 {n_drop:,} tris除去, det {info['det']:+.3f})")
         o3d.io.write_triangle_mesh(
-            str(OUT_DIR / f"mesh_tsdf_{isl['tag']}.ply"), mesh,
+            str(paths.backend / f"mesh_tsdf_{isl['tag']}.ply"), mesh,
             write_ascii=False, compressed=True)
         meshes.append(mesh)
         st.update({"tag": isl["tag"], "verts": len(mesh.vertices),
@@ -705,21 +571,21 @@ def cmd_tsdf(args):
     if args.target and len(merged.triangles) > args.target:
         merged = merged.simplify_quadric_decimation(args.target)
     merged.compute_vertex_normals()
-    out = OUT_DIR / f"mesh_tsdf{SFX}.ply"
+    out = paths.backend / f"mesh_tsdf.ply"
     o3d.io.write_triangle_mesh(str(out), merged, write_ascii=False,
                                compressed=True)
-    (OUT_DIR / f"mesh_tsdf{SFX}.json").write_text(json.dumps(
-        {"session": SESSION, "islands": stats, "voxel": VOXEL,
+    (paths.backend / f"mesh_tsdf.json").write_text(json.dumps(
+        {"session": paths.name, "islands": stats, "voxel": VOXEL,
          "sdf_trunc": SDF_TRUNC, "verts": len(merged.vertices),
          "tris": len(merged.triangles)}, indent=1))
     print(f"\n-> {out} ({len(merged.vertices):,} verts / "
           f"{len(merged.triangles):,} tris)")
 
 
-def wall_distance_stats(pts, floor):
+def wall_distance_stats(paths, pts, floor):
     """点群/メッシュ頂点 → 図面GT壁の面ライン への2D距離統計 (メートル)"""
     from recon3d.postproc.plan_icp import wall_face_segments_px
-    segs = wall_face_segments_px(floor) * mm_per_px() / 1000
+    segs = wall_face_segments_px(paths, floor) * mm_per_px(paths) / 1000
     a, b = segs[:, :2], segs[:, 2:]
     ab = b - a
     ab2 = (ab ** 2).sum(axis=1).clip(min=1e-9)
@@ -748,7 +614,7 @@ def wall_distance_stats(pts, floor):
             "n": int(len(p))}
 
 
-def cmd_compare(args):
+def cmd_compare(paths, args):
     """Poisson / TSDF / 元点群 を図面壁への距離で横並び比較 + 真上ビュー"""
     import matplotlib
     matplotlib.use("Agg")
@@ -760,13 +626,13 @@ def cmd_compare(args):
     from recon3d.postproc.plan_icp import wall_face_segments_px
 
     items = {}
-    xyz, rgb = read_ply_xyzrgb(OUT_DIR / PLY_NAME[SESSION])
+    xyz, rgb = read_ply_xyzrgb(paths.backend / PLY_NAME[paths.name])
     keep = np.ones(len(xyz), bool)
     for c in CURTAIN_COLORS:
         keep &= ~np.all(rgb == np.array(c, np.uint8), axis=1)
     items["pointcloud"] = xyz[keep]
     for kind in ("tsdf", "poisson"):
-        p = OUT_DIR / f"mesh_{kind}{SFX}.ply"
+        p = paths.backend / f"mesh_{kind}.ply"
         if p.exists():
             m = o3d.io.read_triangle_mesh(str(p))
             items[kind] = np.asarray(m.vertices)
@@ -777,9 +643,9 @@ def cmd_compare(args):
             band = pts[(pts[:, 2] > z_off + 0.3) & (pts[:, 2] < z_off + 2.2)]
             if len(band) < 1000:
                 continue
-            res[f"{name}/{floor}"] = wall_distance_stats(band, floor)
+            res[f"{name}/{floor}"] = wall_distance_stats(paths, band, floor)
     print(json.dumps(res, indent=1, ensure_ascii=False))
-    (OUT_DIR / f"mesh_compare{SFX}.json").write_text(
+    (paths.backend / f"mesh_compare.json").write_text(
         json.dumps(res, indent=1, ensure_ascii=False))
 
     # 真上ビュー (壁高さ帯のみ)
@@ -793,7 +659,7 @@ def cmd_compare(args):
             band = pts[(pts[:, 2] > z_off + 0.3) & (pts[:, 2] < z_off + 2.2)]
             ax.scatter(band[::3, 0], band[::3, 1], s=0.3, c="orange" if
                        name != "pointcloud" else "white", alpha=0.5)
-            for x1, y1, x2, y2 in wall_face_segments_px(floor) * mm_per_px() / 1000:
+            for x1, y1, x2, y2 in wall_face_segments_px(paths, floor) * mm_per_px(paths) / 1000:
                 ax.plot([x1, x2], [y1, y2], "-", color="cyan", lw=1.0)
             ax.set_aspect("equal")
             ax.invert_yaxis()
@@ -803,13 +669,13 @@ def cmd_compare(args):
             ax.set_title(f"{name} {floor}: med {t.get('median_m','-')}m "
                          f"cover {t.get('wall_coverage','-')}", fontsize=10)
     fig.tight_layout()
-    fig.savefig(OUT_DIR / f"mesh_compare{SFX}.png", dpi=100,
+    fig.savefig(paths.backend / f"mesh_compare.png", dpi=100,
                 facecolor="#181820")
     plt.close(fig)
-    print(f"-> {OUT_DIR / f'mesh_compare{SFX}.png'}")
+    print(f"-> {paths.backend / f'mesh_compare.png'}")
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("verify")
@@ -826,10 +692,7 @@ def main():
     q.add_argument("--depth", type=int, default=10)
     q.add_argument("--target", type=int, default=1_500_000)
     sub.add_parser("compare")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     {"verify": cmd_verify, "gate1": cmd_gate1, "tsdf": cmd_tsdf,
      "poisson": cmd_poisson, "compare": cmd_compare}[args.cmd](args)
 
-
-if __name__ == "__main__":
-    main()

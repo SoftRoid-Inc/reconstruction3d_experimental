@@ -40,19 +40,18 @@ m_per_unit は**同一セッションではほぼ一定であるべき** (同じ
 使い方:
   from recon3d.postproc.scale_prior import m_per_unit, calibrate
   calibrate(tags)                       # アンカー結果から scale_bias.json を書く
-  mpu, info = m_per_unit("pv0912_1F")   # 較正+外れ値抑制を自動適用
+  mpu, info = m_per_unit(paths, "pv0912_1F")   # 較正+外れ値抑制を自動適用
 """
 import json
 
 import numpy as np
 
-from recon3d.config import BENCH_DIR
 from recon3d.core.geometry import rotation_to_y
 
 
-def island_xz(tag):
+def island_xz(paths, tag):
     """島の (frames, 重力で水平化した平面座標)"""
-    d = np.load(BENCH_DIR / tag / "global_cameras.npz")
+    d = np.load(paths.bench / tag / "global_cameras.npz")
     fr = np.array([int(str(n).replace("frame_", "")) for n in d["names"]])
     poses = d["poses"]
     u = poses[:, :3, 1]
@@ -61,7 +60,7 @@ def island_xz(tag):
     return fr, p[:, [0, 2]]
 
 
-def _fit_scale(src_fr, src_xy, dst_fr, dst_xy, min_n=8):
+def _fit_scale(paths, src_fr, src_xy, dst_fr, dst_xy, min_n=8):
     """共有フレームで相似フィット → src 1単位あたりの dst 単位。鏡像も試す"""
     from recon3d.eval.frontend import fit2d
     common = np.intersect1d(src_fr, dst_fr)
@@ -82,49 +81,49 @@ def _fit_scale(src_fr, src_xy, dst_fr, dst_xy, min_n=8):
     return best[0], len(common)
 
 
-def _mapany_tag(tag, fr):
+def _mapany_tag(paths, tag, fr):
     """この島のフレームを最もよく覆う macond タグを選ぶ"""
     best = (None, 0)
-    for p in BENCH_DIR.glob("macond*"):
+    for p in paths.bench.glob("macond*"):
         if not (p / "global_cameras.npz").exists():
             continue
-        mfr, _ = island_xz(p.name)
+        mfr, _ = island_xz(paths, p.name)
         n = len(np.intersect1d(fr, mfr))
         if n > best[1]:
             best = (p.name, n)
     return best
 
 
-def from_mapany(tag):
+def from_mapany(paths, tag):
     """MapAnything条件付け出力(ほぼメートル)との相似フィット"""
-    fr, xy = island_xz(tag)
-    mtag, n_ov = _mapany_tag(tag, fr)
+    fr, xy = island_xz(paths, tag)
+    mtag, n_ov = _mapany_tag(paths, tag, fr)
     if mtag is None:
         raise RuntimeError(f"{tag}: macond出力が見つかりません")
-    mfr, mxy = island_xz(mtag)
-    s, n = _fit_scale(fr, xy, mfr, mxy)
+    mfr, mxy = island_xz(paths, mtag)
+    s, n = _fit_scale(paths, fr, xy, mfr, mxy)
     if s is None:
         raise RuntimeError(f"{tag}: {mtag} との共有フレームが{n}本しかない")
     return s, {"source": "mapany", "ref": mtag, "n_shared": n}
 
 
-def from_gt(tag, session=None):
+def from_gt(paths, tag):
     """GT軌跡との相似フィット (上限確認用。本番では使えない)"""
     from recon3d.eval.chunk_cmp import gt_interp
     from recon3d.eval.gt_traj import mm_per_px, load_gt
-    fr, xy = island_xz(tag)
-    gt = load_gt(session)
-    g, idx = gt_interp(gt, fr, mm_per_px())
-    s, n = _fit_scale(fr[idx], xy[idx], fr[idx], g)
+    fr, xy = island_xz(paths, tag)
+    gt = load_gt(paths)
+    g, idx = gt_interp(gt, fr, mm_per_px(paths))
+    s, n = _fit_scale(paths, fr[idx], xy[idx], fr[idx], g)
     if s is None:
         raise RuntimeError(f"{tag}: GT対応が{n}本しかない")
     return s, {"source": "gt", "n_shared": n}
 
 
-def from_slab(tag):
+def from_slab(paths, tag):
     """既定: カメラ高 / 床スラブピーク (点群依存。誤ピークで破綻する)"""
     from recon3d.postproc.anchor import prepare_island
-    return prepare_island(tag)["m_per_unit"], {"source": "slab"}
+    return prepare_island(paths, tag)["m_per_unit"], {"source": "slab"}
 
 
 SOURCES = {"slab": from_slab, "mapany": from_mapany, "gt": from_gt}
@@ -133,26 +132,24 @@ CALIB_NAME = "scale_bias.json"
 MIN_SCORE = 0.02      # これ未満のアンカーは較正に使わない (誤解の s は信用できない)
 
 
-def anchored_s(tag, suffix="_corners"):
+def anchored_s(paths, tag, suffix="_corners"):
     """アンカー済みなら (事前m_per_unit, 相似スケールs, score) を返す"""
-    from recon3d.config import OUT_DIR
-    p = OUT_DIR / f"anchor_{tag}{suffix}.json"
+    p = paths.backend / f"anchor_{tag}{suffix}.json"
     if not p.exists():
         return None
     a = json.loads(p.read_text())
     return a.get("m_per_unit"), a.get("s"), a.get("score", 0.0)
 
 
-def calibrate(tags, suffix="_corners", out_name=CALIB_NAME):
+def calibrate(paths, tags, suffix="_corners", out_name=CALIB_NAME):
     """アンカー結果から較正ファイルを書く (島ごとの補正値 + セッション中央値)
 
     セッション中央値はアンカーに失敗した島への保険。散らばり (MAD) も残し、
     小さければ「系統バイアス」、大きければ「島ごとのばらつき」と読める。
     """
-    from recon3d.config import OUT_DIR
     per, ss = {}, []
     for t in tags:
-        r = anchored_s(t, suffix)
+        r = anchored_s(paths, t, suffix)
         if r is None or not r[0] or not r[1] or r[2] < MIN_SCORE:
             continue
         prior, s, score = r
@@ -166,17 +163,16 @@ def calibrate(tags, suffix="_corners", out_name=CALIB_NAME):
     mad = float(np.median(np.abs(np.array(ss) - med)))
     out = {"session_bias": round(med, 4), "mad": round(mad, 4),
            "n": len(ss), "islands": per}
-    (OUT_DIR / out_name).write_text(json.dumps(out, indent=1,
+    (paths.backend / out_name).write_text(json.dumps(out, indent=1,
                                                ensure_ascii=False))
     kind = "系統バイアス" if mad < 0.08 else "島ごとのばらつき"
     print(f"[scale_prior] 較正: bias={med:.3f} MAD={mad:.3f} ({kind}, n={len(ss)})"
-          f" -> {OUT_DIR / out_name}")
+          f" -> {paths.backend / out_name}")
     return out
 
 
-def _calib(out_name=CALIB_NAME):
-    from recon3d.config import OUT_DIR
-    p = OUT_DIR / out_name
+def _calib(paths, out_name=CALIB_NAME):
+    p = paths.backend / out_name
     return json.loads(p.read_text()) if p.exists() else None
 
 
@@ -186,7 +182,7 @@ OUTLIER_TOL = 1.5      # セッション中央値のこの倍率を超えたら�
 _SESSION_MED = {}      # (manifest, source) -> 中央値。島ごとに測り直さない
 
 
-def session_median(source="mapany", fallback="slab",
+def session_median(paths, source="mapany", fallback="slab",
                    manifest="pv_manifest.json"):
     """セッション全島の m_per_unit の中央値 (外れ値抑制の基準)
 
@@ -197,7 +193,7 @@ def session_median(source="mapany", fallback="slab",
     if key in _SESSION_MED:
         return _SESSION_MED[key]
     try:
-        man = json.loads((BENCH_DIR / manifest).read_text())
+        man = json.loads((paths.bench / manifest).read_text())
     except Exception:
         _SESSION_MED[key] = None
         return None
@@ -206,11 +202,11 @@ def session_median(source="mapany", fallback="slab",
     vals, weak = [], []
     for m in man:
         try:
-            v, _ = SOURCES[source](m["tag"])
+            v, _ = SOURCES[source](paths, m["tag"])
             tgt = vals
         except Exception:
             try:
-                v, _ = SOURCES[fallback](m["tag"])
+                v, _ = SOURCES[fallback](paths, m["tag"])
                 tgt = weak
             except Exception:
                 continue
@@ -222,29 +218,29 @@ def session_median(source="mapany", fallback="slab",
     return med
 
 
-def m_per_unit(tag, source="mapany", fallback="slab", use_calib=True,
-               clamp_outlier=True):
+def m_per_unit(paths, tag, source="mapany", fallback="slab",
+               use_calib=True, clamp_outlier=True):
     """島のm_per_unitを返す。較正があれば適用、取れなければ fallback へ
 
     優先順: ①その島自身のアンカー由来の補正値 ②事前×セッション中央値 ③素の事前
     """
-    cal = _calib() if use_calib else None
+    cal = _calib(paths) if use_calib else None
     if cal and tag in cal["islands"]:
         v = cal["islands"][tag]["m_per_unit"]
         return float(v), {"source": "calib(self)", "s": cal["islands"][tag]["s"]}
     try:
-        v, info = SOURCES[source](tag)
+        v, info = SOURCES[source](paths, tag)
     except Exception as e:
         if not fallback or fallback == source:
             raise
         print(f"[scale_prior] {tag}: {source} 不可 ({e}) -> {fallback}")
-        v, info = SOURCES[fallback](tag)
+        v, info = SOURCES[fallback](paths, tag)
         info = {**info, "fallback_from": source}
     if cal:
         v = v * cal["session_bias"]
         info = {**info, "bias": cal["session_bias"]}
     if clamp_outlier:
-        med = session_median(source, fallback)
+        med = session_median(paths, source, fallback)
         # fallbackした島は供給源そのものが信用できない (slabは誤差97〜383%)。
         # 比が許容内でも中央値に寄せた方が安全
         fell_back = "fallback_from" in info
@@ -258,20 +254,21 @@ def m_per_unit(tag, source="mapany", fallback="slab", use_calib=True,
     return float(v), info
 
 
-if __name__ == "__main__":
+def main(paths, argv=None):
+    """供給源ごとの m_per_unit を島別に並べる (gt があれば比も出す)"""
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default="pv_full_manifest.json")
     ap.add_argument("--sources", nargs="*", default=list(SOURCES))
-    args = ap.parse_args()
-    man = json.loads((BENCH_DIR / args.manifest).read_text())
+    args = ap.parse_args(argv)
+    man = json.loads((paths.bench / args.manifest).read_text())
     print(f"{'island':16} " + " ".join(f"{s:>10}" for s in args.sources)
           + "   (gt比)")
     for m in man:
         vals = {}
         for s in args.sources:
             try:
-                vals[s] = SOURCES[s](m["tag"])[0]
+                vals[s] = SOURCES[s](paths, m["tag"])[0]
             except Exception:
                 vals[s] = float("nan")
         ref = vals.get("gt")

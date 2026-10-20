@@ -75,7 +75,7 @@ reconstruction/
   masks/    frame_number_000000.jpg ...     人物マスク (白=有効/黒=人物)
   imu/      transitions.json  idle_spans.json   IMU派生物 (外部生成済み)
   floors/   1F.json 1F.jpg 2F.json 2F.jpg  meta.json
-  results/<session>/                        ← 出力はここだけ。入力は不変
+  results/                                  ← 出力はここだけ。入力は不変
 ```
 
 `floors/meta.json` に**図面の実寸**を書く。
@@ -89,10 +89,11 @@ reconstruction/
 > (`core/plan_grid.PlanGrid` → `recon3d.calibrate.scale_mm_per_px`)。
 > 階でスパンが違う物件 (セットバック等) は階名→mm の辞書で書く。
 > 単一値なら `{"known_width_mm": 13877.5}` でよい。
-> 任意キー: `session` / `gt_session` / `drawing_wh` / `mm_per_px`。
+> 任意キー: `gt_session` / `drawing_wh` / `mm_per_px`。
 
-セッション名は既定で**入力ディレクトリ名**。出力は `results/<session>/`。
-同じ入力を条件違いで回すなら `session=myrun` で分けられる。
+出力は `results/`。島タグの接頭辞は**入力ディレクトリ名**から付く
+(`recon_0912` なら `pvrecon_0912_s001`)。同じ入力を条件違いで回すなら、
+入力ディレクトリごと別名にする — データセット名は**ディレクトリ名が唯一の出所**。
 
 ### 入力の欠けに対する態度
 
@@ -217,8 +218,8 @@ python main.py inspect input=/data/reconstruction
 docker compose exec recon3d python main.py run \
     input=/data/reconstruction 'steps=[chains]'
 
-# 階割当の雛形を作って results/<session>/backend/floor_assign.json を編集
-IMG_SESSION=/data/reconstruction python -m recon3d.core.floor_assign --template
+# 階割当の雛形を作って results/backend/floor_assign.json を編集
+python main.py tool floor_assign --input /data/reconstruction --template
 
 # 後半: アンカーから出力まで (既存チャンクを使うのでホストでも動く)
 python main.py run input=/data/reconstruction 'steps=[anchor,export]'
@@ -230,7 +231,6 @@ python main.py steps      # 段の一覧と依存関係
 
 ```bash
 ... run input=/data/x chunking.chunk_size=24 chunking.stride=8
-... run input=/data/x session=myrun        # 出力を results/myrun/ に分ける
 ... run input=/data/x 'steps=[bridge,anchor]' bridge.skip_cross_floor=true
 ```
 
@@ -242,45 +242,39 @@ res = api.run("/data/reconstruction", steps=["anchor"], segments="imu")
 print(res.results_dir, res.islands, res.skipped)
 ```
 
-> `api.run()` は**このプロセスで実行する**。`recon3d.config` は import 時に
-> `SESSION/PROP/FRAMES_DIR/RESULTS_DIR/...` を凍結し、137箇所が
-> `from recon3d.config import X` で値を束ねるので、`reload` では戻らない
-> = **1プロセス = 1データセット**。だから `IMG_SESSION` が決まる前に
-> `recon3d.*` を import してはいけない (下の「Kubernetes / Dagster Pipes で
-> 回す」を参照)。同一プロセスから**別の**データセットを回したいときは、
-> `api` に分岐を足さず CLI を子プロセスで起こす。
+> `api.run()` は**このプロセスで実行する**。所在は `Paths` に入って
+> 引数で配られるだけなので、同一プロセスから別のデータセットを回したければ
+> `Paths` を作り直せばよい (以前は `config.py` が import 時に凍結していて
+> 1プロセス=1データセットだった。その制約はもう無い)。
 
-### 既存7セッション (開発用CLI)
+### 個別モジュールを叩く (`tool`)
 
-`pipeline.py` は引数を `steps.py` のオプションへ翻訳するだけの互換CLI。
-21島の開発フローがこれに乗っている。
+段より細かい単位で回したいとき。各モジュールの argparse をそのまま使い、
+`-h` はツール側のヘルプへ通る。
 
 ```bash
-IMG_SESSION=0912 python -m recon3d.pipeline run --session 0912 \
-    --segments imu --max-seg 160 --no-eval
-IMG_SESSION=0912 python -m recon3d.core.floor_assign --template
-IMG_SESSION=0912 python -m recon3d.pipeline run --session 0912 \
-    --segments imu --max-seg 160 --post anchor,export,viewer --no-eval
+python main.py tool                                     # 一覧
+python main.py tool posegraph --input /data/x --from-tag pv_s001
+python main.py tool corners   --input /data/x --anchor pv_s001:1F
 ```
 
 6.3分の動画でゼロから**11分45秒**(RTX4090 Laptop)。前半が動画1分あたり
 1.25分、後半が0.3分。階割当は前半の裏で終わるので待ち時間にならない。
 
-### IMG_SESSION が受け付ける3つの形
+### データセットを指すのは `input=` だけ
 
-環境変数は**1本だけ**。別変数を足すと、子プロセスへ環境を丸ごと渡す経路
-(`{**os.environ, "IMG_SESSION": sess}`) から漏れるし、「両方セットされたとき
-どちらが勝つか」という曖昧さも生まれる。
+環境変数は**使わない**。所在は `paths.Paths` に入り、各段へ**引数で**配られる。
+渡し忘れは `TypeError` で即座に出る — かつて `IMG_SESSION` 未設定が既定
+セッションに落ち、別物件の図面・GTで**例外なしに完走した**事故があった
+(2026-10-09)。`tests/check_imports.py` が「`paths` に既定値を置かないこと」を
+静的に見張っているのは、その形を二度と作らないため。
 
-| 形 | 意味 |
+| 要素 | 出所 |
 |---|---|
-| `0912` | 登録済みセッション名 |
-| `/data/reconstruction` | データセットディレクトリ (名前=ディレクトリ名) |
-| `myrun=/data/reconstruction` | 名前を明示 (同じ入力を条件違いで回す) |
-
-> 子プロセスやコンテナを起こすときは `config.SESSION` ではなく
-> **`config.SESSION_REF`** を渡すこと。`SESSION` は登録後の派生名なので、
-> env に戻すとレジストリに無くて落ちる。
+| データセット名 (タグ接頭辞) | 入力ディレクトリ名 |
+| 入出力の場所 | `Paths` (入力1ディレクトリから導出) |
+| 図面の実寸 | `floors/meta.json` の `known_width_mm` |
+| 段の選択・パラメータ | hydra (`conf/recon.yaml` + `key=value`) |
 
 ### 単一イメージ (`reconstruction_3d/Dockerfile`)
 
@@ -324,34 +318,27 @@ docker compose exec -w /opt/recon3d recon3d python main.py run input=...
 **1ポッド = 1データセット**なら、パイプラインは**1プロセスで完結する**。
 `api.run()` は子プロセスを立てない。
 
-config の凍結 (`IMG_SESSION` を最初の import で固め、137箇所が値を束ねる) は
-「同一プロセス内で2つのデータセットが混ざる」事故を防ぐための仕組みで、
-**ポッド境界がすでにそれを担保している**。そこに子プロセスを足すと、
-下の SIGTERM の問題を1段増やすだけで得が無い。
+「同一プロセス内で2つのデータセットが混ざる」心配も無い — 所在は
+`Paths` のインスタンスで、引数として配られるだけだから、別の `Paths` を
+作っても干渉しない。子プロセスを足しても下の SIGTERM の問題を1段増やす
+だけで得が無い。
 
 ```python
 # ポッドの入口 (Dagster Pipes)
 from dagster_pipes import open_dagster_pipes
 
 with open_dagster_pipes() as pipes:
-    inp = pipes.get_extra("input")
-    from recon3d import api          # ← ここで初めて import する
-    res = api.run(inp, steps=pipes.get_extra("steps"), segments="imu")
+    from recon3d import api
+    res = api.run(pipes.get_extra("input"),
+                  steps=pipes.get_extra("steps"), segments="imu")
     pipes.report_asset_materialization(
-        metadata={"session": res.session, "islands": len(res.islands)})
+        metadata={"results": res.results_dir, "islands": len(res.islands)})
 ```
 
-**入口の規則: `IMG_SESSION` が決まる前に `recon3d.*` を import しない。**
-Pipes の入口モジュールは top-level で `recon3d` を import せず、
-`open_dagster_pipes()` の中で import する。破った場合 `api.run()` は
-
-```
-RuntimeError: config は既に '0828' で凍結済みなので '/data/x' は回せない
-```
-
-で**落ちる** (黙って 28-AAAAA を読み始めたりはしない)。
-`api` / `steps` / `tools.recon` / `tools._hydra` は import しただけでは config を
-読まないよう保っており、`tests/check_imports.py` の「import衛生」が金床になっている。
+import の順序に規則は無い。`api.run()` に入力ディレクトリを渡した時点で
+`Paths` が決まり、そこから先は全部引数で流れる。**渡し忘れると
+`TypeError`** で落ちる — 黙って別の物件を読み始めることはない
+(`tests/check_imports.py` の「`paths` に既定値を置かないこと」が金床)。
 
 CLI をそのままポッドのコマンドにしてもよい。`exec` して PID 1 にできる。
 
@@ -422,7 +409,7 @@ GTが無いので測れるのは内部指標だけ:
 島単体で走らせたいときは従来どおり:
 
 ```bash
-IMG_SESSION=0912 python -m recon3d.core.posegraph \
+python main.py tool posegraph --input /data/recon_0912 \
     --from-tag pv0912_s001 --tag pg12_pv0912_s001
 ```
 
@@ -551,8 +538,8 @@ python main.py run     input=ext/sfm11196 'steps=[chains]'
 recon3d/
   steps.py           **段の登録表と依存解決** (順序はここが決める)
   api.py             外部から呼ぶ入口 (run / plan)。プロセス内で実行する
-  pipeline.py        既存7セッション用の互換CLI (steps.py へ翻訳するだけ)
-  config.py          物件レジストリ。IMG_SESSION はパスも受ける
+  paths.py           データセットの所在 (Paths)。入力1ディレクトリから導く
+  constants.py       入力に依らない定数だけ
   conf/
     recon.yaml         入力ディレクトリ実行の設定 (hydra)
   core/              前段: 入力→島
@@ -585,36 +572,49 @@ recon3d/
     outdoor_label.py   屋外島の判定 (outdoor_classification を集計)
     island_diag.py     島内誤差の分解 (累積/局所破綻/歪み)
     island_viewer.py   島の点群をWebGLで見る
-  out/               レポート生成
-    viewer.py          整列点群のビューア
-    all_report.py      全データセット横断レポート
-    ext_report.py      外部データのレポート
-    pg_report.py       ポーズグラフ比較レポート
+  out/               書き出し
+    export.py          アンカー済みの島を図面座標の点群へ
+    viewer.py          整列点群のビューア (WebGL)
+  imu/               IMU派生物 (transitions / idle / timeline / flowstate_yaw)
+  mesh/              メッシュ・衝突モデル (別コンテナの open3d が要る)
+  plan2model/        **間取り図→3Dモデル** (撮影と独立の系統)
+    loader.py          labelme / prediction.json のパース
+    calibrate.py       known_width_mm から mm/px を出す
+    geometry.py        壁・柱・開口の箱化 (開口は壁の隙間を埋める)
+    mesh.py            trimesh シーン組み立て → glb / obj
+    build.py           build_from_paths (CLI: plan2model build)
+    verify.py          verify_from_paths (2D再投影IoU)
   tools/
     recon.py           **入力ディレクトリから回すCLI** (typer + hydra)
                        — 入口は リポジトリ直下の main.py
     _hydra.py          hydra設定読み込みの共通部
-    align_tool.py      軌跡を手で図面に登録する
   tests/             pytest 無しでも走る素のスクリプト
-    check_config.py    全セッションの config 凍結値スナップショット
-    check_imports.py   全モジュールの import スモーク
+    check_paths.py     実物の入力で Paths を確かめる
+    check_imports.py   import スモーク + 「paths を省けない」こと
 ```
 
 ### テスト
 
 ホストに pytest が無くても動くよう、検査の実体は素のスクリプトに置き、
-`test_checks.py` が pytest から同じ関数を呼ぶ。config はプロセス単位で
-凍結するので、**検査は必ず子プロセス**で行う。
+`test_checks.py` が pytest から同じ関数を呼ぶ。import の副作用を素の状態で
+観測したいので、**検査は子プロセス**で行う。
 
 ```bash
-python -m recon3d.tests.check_config            # 凍結値の差分 (0=一致)
-python -m recon3d.tests.check_config --update   # ベースライン更新
-python -m recon3d.tests.check_imports           # import スモーク
-python -m recon3d.tests.check_imports /data/reconstruction   # 新しい入力でも
+python -m recon3d.tests.check_imports           # import + paths の規約
+RECON3D_FIXTURE=/data/recon_0912 \
+  python -m recon3d.tests.check_paths           # 実物で Paths を確かめる
 ```
 
-`check_config` は「黙って別の物件を読む」退行を捕まえるための金床。
-ベースラインを更新するときは**意図した変更**をファイル冒頭に書き残すこと。
+`check_imports` が見るのは3つ:
+
+| 検査 | 捕まえる退行 |
+|---|---|
+| 全モジュールの import | 図面やGTを import 時に読んで、アンカー経路ごと落ちる形 |
+| `paths` に既定値を置かない | 渡し忘れが「黙って別物を読む」に戻る形 (2026-10-09の事故) |
+| 本番入口が `paths` を受ける | どこかに所在を固定し直してしまった形 |
+
+GPU や別コンテナにしか無い依存 (torch / shapely / open3d …) の
+`ModuleNotFoundError` は環境差として除外する — 退行ではない。
 
 ---
 
@@ -646,7 +646,7 @@ python -m recon3d.tests.check_imports /data/reconstruction   # 新しい入力�
 | **レポートに生成条件を書く** | 設定を変えながら検証するので、無いとどの条件の数字か分からなくなる |
 | **import 時に図面を読まない** | `mm_per_px()` は関数。定数にすると、壁注釈の無い入力で `TypeError` が飛んだ瞬間にアンカー経路36モジュールが **import ごと**落ちる |
 | **1プロセス1データセット** | 約90モジュールが `from config import X` で値を束ねるので `reload` では戻らない。セッションを跨ぐなら必ずプロセス分離 |
-| **子には `SESSION_REF`** | `SESSION` は登録後の派生名。env に戻すとレジストリに無くて落ちる |
+| **`paths` に既定値を置かない** | 既定値を1つ置いた瞬間、渡し忘れが「黙って別物を読む」に戻る (`check_imports`) |
 | **アンカーには実寸も要る** | 壁注釈 (labelme) だけでは px→m が決まらない。`floors/meta.json` の `known_width_mm` が無いと `PlanGrid` が `TypeError` |
 | **`.dockerignore` が無いとビルドが死ぬ** | `reconstruction_3d` は188GB。build context をコードだけに絞る |
 | **`os.chdir` は同一プロセスに残る** | PanoVGGT は相対パスで重みを引くので chdir が要る。subprocess 時代は無害だったが、戻さないと後続の段が 相対パスを見失う (`panovggt_batch._in_panovggt` が try/finally で戻す) |

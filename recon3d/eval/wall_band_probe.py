@@ -20,7 +20,6 @@ import json
 
 import numpy as np
 
-from recon3d.config import BENCH_DIR, OUT_DIR
 from recon3d.postproc.anchor import CELL_M, Y_BIN_M, prepare_island
 from recon3d.postproc.scale_prior import m_per_unit
 
@@ -39,13 +38,13 @@ def _occupancy(pts_xz, cell_u, shape, origin):
     return occ
 
 
-def probe(tag, bin_m=Y_BIN_M):
+def probe(paths, tag, bin_m=Y_BIN_M):
     """島の高さビンごとの「壁らしさ」。(bins, 結果dict)"""
     import recon3d.postproc.anchor as _a
     saved, _a.WALL_BAND_M = _a.WALL_BAND_M, None   # 帯を測るので帯は掛けない
     try:
-        mpu, _ = m_per_unit(tag)
-        d = prepare_island(tag, mpu=mpu)
+        mpu, _ = m_per_unit(paths, tag)
+        d = prepare_island(paths, tag, mpu=mpu)
     finally:
         _a.WALL_BAND_M = saved
     w = d["density_pts"]
@@ -103,13 +102,13 @@ def band_from(rows, frac=IOU_FRAC):
     return min(hs), max(hs), max(abs(min(hs)), abs(max(hs))), len(run)
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--islands", nargs="*", default=None)
     ap.add_argument("--manifest", default="pv_manifest.json")
     ap.add_argument("--detail", action="store_true", help="ビンごとに出す")
-    args = ap.parse_args()
-    man = json.loads((BENCH_DIR / args.manifest).read_text())
+    args = ap.parse_args(argv)
+    man = json.loads((paths.bench / args.manifest).read_text())
     out = []
     print(f"{'island':20s} {'壁らしい帯 (カメラ基準)':>26s} {'片側幅':>7s} "
           f"{'最良IoU':>8s}")
@@ -117,7 +116,7 @@ def main():
         if args.islands and m["tag"] not in args.islands:
             continue
         try:
-            rows = probe(m["tag"])
+            rows = probe(paths, m["tag"])
         except Exception as e:
             print(f"{m['tag']:20s} 失敗 ({type(e).__name__}: {e})")
             continue
@@ -136,10 +135,7 @@ def main():
         out.append({"tag": m["tag"], "lo_m": b[0], "hi_m": b[1],
                     "half_width_m": b[2], "best_iou": best})
     if out:
-        p = OUT_DIR / "wall_band_probe.json"
+        p = paths.backend / "wall_band_probe.json"
         p.write_text(json.dumps(out, ensure_ascii=False, indent=1))
         print(f"-> {p}")
 
-
-if __name__ == "__main__":
-    main()

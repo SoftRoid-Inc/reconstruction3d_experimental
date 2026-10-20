@@ -23,7 +23,6 @@ from pathlib import Path
 
 import numpy as np
 
-from recon3d.config import IMU_DIR, PROP, SESSION
 
 IMU_TRAJ_PATHS = (
     "/mnt/data/git/polish-pipeline/submodules/imu_experiments_code",
@@ -42,43 +41,47 @@ def _imu_traj():
     raise RuntimeError(f"imu_traj が見つかりません: {IMU_TRAJ_PATHS}")
 
 
-def insv_path(session=None):
-    d = PROP.root / (session or SESSION)
+def insv_path(paths):
+    d = paths.root
     cands = sorted(d.glob("*.insv"))
     if not cands:
         raise FileNotFoundError(f"{d} に .insv がありません")
     return cands[0]
 
 
-def compute(out_name="flowstate_yaw.npz"):
+def compute(paths, out_name="flowstate_yaw.npz"):
     """フレーム毎の世界ヨー [deg] を出す"""
     from recon3d.imu.timeline import frame_times, n_frames
     load_quat, flow_yaw = _imu_traj()
-    stab = load_quat(insv_path())
+    stab = load_quat(insv_path(paths))
     t_y, yaw = flow_yaw(stab)
-    n = n_frames()
-    t, src = frame_times(n)
+    n = n_frames(paths)
+    t, src = frame_times(paths, n)
     t = t - t[0]                      # クォータニオン側と同じ「フレーム0=0」へ
     # ヨーは角度なので複素数にしてから補間する (±180°の折返しを跨がないため)
     z = np.interp(t, t_y, np.cos(np.radians(yaw))) + \
         1j * np.interp(t, t_y, np.sin(np.radians(yaw)))
     deg = np.degrees(np.angle(z))
-    IMU_DIR.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(IMU_DIR / out_name,
+    paths.imu.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(paths.imu / out_name,
                         frames=np.arange(n), yaw_deg=deg,
                         n_quat=len(stab.q), frame_time_src=src)
     print(f"[flowstate] {n}フレーム (quat {len(stab.q)}個, 時刻={src}) "
-          f"ヨー {deg.min():.1f}〜{deg.max():.1f}° -> {IMU_DIR / out_name}")
+          f"ヨー {deg.min():.1f}〜{deg.max():.1f}° -> {paths.imu / out_name}")
     return deg
 
 
-def load(out_name="flowstate_yaw.npz"):
+def load(paths, out_name="flowstate_yaw.npz"):
     """保存済みのフレーム毎ヨー [deg]。無ければ None"""
-    p = IMU_DIR / out_name
+    p = paths.imu / out_name
     return np.load(p)["yaw_deg"] if p.exists() else None
 
 
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
+
+def main(paths, argv=None):
+    """`.insv` の手ぶれ補正クォータニオンからフレーム毎ヨーを作る"""
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default="flowstate_yaw.npz")
-    compute(ap.parse_args().out)
+    args = ap.parse_args(argv)
+    compute(paths, out_name=args.out)

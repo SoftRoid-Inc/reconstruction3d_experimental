@@ -20,14 +20,13 @@ import shutil
 
 import numpy as np
 
-from recon3d.config import BENCH_DIR
 from recon3d.core.geometry import apply, sim3_umeyama
 
 CTRL_WIN = 3      # Sim3フィットに使う近傍制御点数 (片側)
 
 
-def _load(tag):
-    d = np.load(BENCH_DIR / tag / "global_cameras.npz")
+def _load(paths, tag):
+    d = np.load(paths.bench / tag / "global_cameras.npz")
     names = [str(n) for n in d["names"]]
     frames = np.array([int(n.replace("frame_", "")) for n in names])
     order = np.argsort(frames)
@@ -65,9 +64,9 @@ def _quat_to_r(q):
         [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
 
 
-def interp(pv_tag, ma_tag, out_tag):
-    names_p, fr_p, P, pose_p = _load(pv_tag)
-    names_m, fr_m, Q, pose_m = _load(ma_tag)
+def interp(paths, pv_tag, ma_tag, out_tag):
+    names_p, fr_p, P, pose_p = _load(paths, pv_tag)
+    names_m, fr_m, Q, pose_m = _load(paths, ma_tag)
     name_to_i = {n: i for i, n in enumerate(names_p)}
     ctrl = [(name_to_i[n], j) for j, n in enumerate(names_m)
             if n in name_to_i]           # (pv index, macond index)
@@ -109,11 +108,11 @@ def interp(pv_tag, ma_tag, out_tag):
     poses = np.tile(np.eye(4), (n, 1, 1))
     poses[:, :3, :3] = rot
     poses[:, :3, 3] = x
-    out = BENCH_DIR / out_tag
+    out = paths.bench / out_tag
     out.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(out / "global_cameras.npz",
                         names=np.array(names_p), positions=x, poses=poses)
-    shutil.copy(BENCH_DIR / ma_tag / "global_points.ply",
+    shutil.copy(paths.bench / ma_tag / "global_points.ply",
                 out / "global_points.ply")
     (out / "chain_log.json").write_text(json.dumps([{
         "mode": "macond_interp", "pv": pv_tag, "ma": ma_tag,
@@ -123,27 +122,24 @@ def interp(pv_tag, ma_tag, out_tag):
           f"ctrl resid pre-snap med {np.median(snap):.3f}m)")
 
 
-def main():
+def main(paths, argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--pv")
     ap.add_argument("--ma")
     ap.add_argument("--out", default=None)
     ap.add_argument("--all", action="store_true",
                     help="pv_manifest.jsonの全島を pv→macond→maf で処理")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     if args.all:
-        manifest = json.loads((BENCH_DIR / "pv_manifest.json").read_text())
+        manifest = json.loads((paths.bench / "pv_manifest.json").read_text())
         for m in manifest:
             pv = m["tag"]
             ma = pv.replace("pv", "macond", 1)
-            if not (BENCH_DIR / ma / "global_cameras.npz").exists():
+            if not (paths.bench / ma / "global_cameras.npz").exists():
                 print(f"{ma}: なし -> skip")
                 continue
-            interp(pv, ma, pv.replace("pv", "maf", 1))
+            interp(paths, pv, ma, pv.replace("pv", "maf", 1))
     else:
-        interp(args.pv, args.ma, args.out or
+        interp(paths, args.pv, args.ma, args.out or
                args.pv.replace("pv", "maf", 1))
 
-
-if __name__ == "__main__":
-    main()

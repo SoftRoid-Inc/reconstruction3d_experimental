@@ -23,7 +23,6 @@ from pathlib import Path
 
 import numpy as np
 
-from recon3d.config import IMU_DIR
 from recon3d.imu.timeline import frame_times, n_frames
 
 # ホスト / コンテナ 両方のパスを試す
@@ -43,24 +42,24 @@ def _idle_mod():
     raise RuntimeError(f"imu_traj が見つかりません: {IMU_TRAJ_PATHS}")
 
 
-def _traj_npz():
+def _traj_npz(paths):
     """imu_trajスキーマ (t, gyr, acc) のnpzを用意する"""
-    conv = IMU_DIR / "imu_raw_traj.npz"
+    conv = paths.imu / "imu_raw_traj.npz"
     if not conv.exists():
-        raw = np.load(IMU_DIR / "imu_raw.npz")
+        raw = np.load(paths.imu / "imu_raw.npz")
         np.savez_compressed(conv, t=raw["t"], gyr=raw["gyro"], acc=raw["accel"],
                             scaled_from_g=np.array(False))
     return conv
 
 
-def detect(out_name="idle_spans.json", **kw):
+def detect(paths, out_name="idle_spans.json", **kw):
     """imu_raw.npz → idle_spans.json。kwはdetect_idle_spansへ透過"""
-    n = n_frames()
-    t, src = frame_times(n)
+    n = n_frames(paths)
+    t, src = frame_times(paths, n)
     kw.setdefault("frame_times", t)
     kw.setdefault("n_frames", n)
     kw.setdefault("frame_dt", float(np.median(np.diff(t))))
-    res = _idle_mod()(imu_npz=_traj_npz(), out_json=IMU_DIR / out_name, **kw)
+    res = _idle_mod()(imu_npz=_traj_npz(paths), out_json=paths.imu / out_name, **kw)
     m = res["meta"]
     print(f"[idle] frame times={src} spans={m['n_spans']} "
           f"静止フレーム {m['idle_frame_count']}/{n} "
@@ -71,24 +70,28 @@ def detect(out_name="idle_spans.json", **kw):
     return res
 
 
-def spans(out_name="idle_spans.json"):
+def spans(paths, out_name="idle_spans.json"):
     """保存済み静止区間を [(frame_start, frame_end)] で返す (無ければ空)"""
-    p = IMU_DIR / out_name
+    p = paths.imu / out_name
     if not p.exists():
         return []
     return [(int(s["frame_start"]), int(s["frame_end"]))
             for s in json.loads(p.read_text())["spans"]]
 
 
-if __name__ == "__main__":
+
+def main(paths, argv=None):
+    """IMUから静止区間を検出して idle_spans.json に保存する"""
     import argparse
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--min-duration-sec", type=float, default=1.5)
-    ap.add_argument("--window-sec", type=float, default=1.0)
-    ap.add_argument("--gyr", type=float, default=0.05, help="rad/s")
-    ap.add_argument("--acc", type=float, default=0.3, help="m/s^2")
+    ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default="idle_spans.json")
-    args = ap.parse_args()
-    detect(args.out, min_duration_sec=args.min_duration_sec,
-           window_sec=args.window_sec, gyr_thresh=args.gyr,
-           acc_thresh=args.acc)
+    ap.add_argument("--min-duration-sec", type=float, default=None)
+    ap.add_argument("--gyr", type=float, default=None,
+                    help="角速度しきい値 [rad/s]")
+    args = ap.parse_args(argv)
+    kw = {}
+    if args.min_duration_sec is not None:
+        kw["min_duration_sec"] = args.min_duration_sec
+    if args.gyr is not None:
+        kw["gyr_thresh"] = args.gyr
+    detect(paths, out_name=args.out, **kw)
