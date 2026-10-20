@@ -33,21 +33,7 @@ from PIL import Image
 from recon3d.postproc.plan_match import match_floor
 from recon3d.core.geometry import rotation_to_y
 from recon3d.postproc.density_map import slab_peaks
-from recon3d.eval.gt_traj import mm_per_px, load_gt
-
-
-def _mpx(paths) -> float:
-    """メートル換算 [mm/px]。無ければ落とす
-
-    mm/px が決まらない入力 (図面の実寸なし) では、ここから先の「何メートル
-    ずれている」という話が全部意味を失う。黙って続けない。
-    """
-    v = mm_per_px(paths)
-    if v is None:
-        raise SystemExit(
-            "図面の実寸が未設定なのでメートル換算できない "
-            f"({paths.floors}/meta.json の known_width_mm)")
-    return v
+from recon3d.eval.gt_traj import load_gt, mm_per_px_required
 from recon3d.core.plan_grid import PlanGrid
 from recon3d.core.io_ply import read_ply_xyzrgb
 from recon3d.postproc.plan_icp import cells_to_px, icp_to_walls, segs_to_cells, similarity_from_grid, transform_pts, wall_segments_px
@@ -235,7 +221,7 @@ def anchor_island(paths: Paths, tag: str, floor: str, gt,
                 px = cells_to_px(transform_pts(cam_rc[j][None], s0, th0, t0),
                                  grid)[0]
                 dist_m = math.dist(px, anchored_so_far[k_near]) \
-                    * _mpx(paths) / 1000
+                    * mm_per_px_required(paths) / 1000
                 print(f"  branch theta={b['theta']} score={b['score']:.3f} "
                       f"continuity {dist_m:.2f}m (frame {frames[j]} vs "
                       f"{k_near})")
@@ -299,10 +285,9 @@ def assemble_and_eval(paths: Paths, anchored, floors, gt,
     pdr_path = paths.backend.parent / "imu" / "pdr.npz"
     if os.environ.get("USE_PDR_BRIDGE") and pdr_path.exists():
         z = np.load(pdr_path)
-        pdr = (z["frames"], z["pos"] * 1000 / _mpx(paths))  # m→図面px
+        pdr = (z["frames"], z["pos"] * 1000 / mm_per_px_required(paths))  # m→図面px
 
-    def pdr_at(f):
-        assert pdr is not None       # USE_PDR_BRIDGE のときだけ呼ばれる
+    def pdr_at(f, pdr):
         fr, pos = pdr
         return np.array([np.interp(f, fr, pos[:, 0]),
                          np.interp(f, fr, pos[:, 1])])
@@ -311,7 +296,7 @@ def assemble_and_eval(paths: Paths, anchored, floors, gt,
         """PDR形状を両端アンカーに2点相似フィットして補間 (無ければ線形)"""
         a, b = np.array(anchored[lo]), np.array(anchored[hi])
         if pdr is not None:
-            p1, p2 = pdr_at(lo), pdr_at(hi)
+            p1, p2 = pdr_at(lo, pdr), pdr_at(hi, pdr)
             v_p, v_a = p2 - p1, b - a
             n = np.linalg.norm(v_p)
             if n > 1e-6:
@@ -319,7 +304,7 @@ def assemble_and_eval(paths: Paths, anchored, floors, gt,
                 ang = math.atan2(v_a[1], v_a[0]) - math.atan2(v_p[1], v_p[0])
                 R = np.array([[math.cos(ang), -math.sin(ang)],
                               [math.sin(ang), math.cos(ang)]])
-                return a + s * (R @ (pdr_at(f) - p1))
+                return a + s * (R @ (pdr_at(f, pdr) - p1))
         w = (f - lo) / (hi - lo)
         return a * (1 - w) + b * w
 
@@ -362,7 +347,7 @@ def assemble_and_eval(paths: Paths, anchored, floors, gt,
             continue
         n_eval += 1
         e = math.dist((tkr["x_px"], tkr["y_px"]),
-                      (gt[g]["x_px"], gt[g]["y_px"])) * _mpx(paths) / 1000
+                      (gt[g]["x_px"], gt[g]["y_px"])) * mm_per_px_required(paths) / 1000
         if tkr["floor"] == gt[g]["floor"]:
             floor_ok += 1
         key = ("stair" if tkr["frame"] in stair_set

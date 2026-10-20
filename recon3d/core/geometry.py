@@ -41,6 +41,25 @@ def compose(T2: Sim3, T1: Sim3) -> Sim3:
     return (s2 * s1, R2 @ R1, s2 * (R2 @ t1) + t2)
 
 
+def invert(T: Sim3) -> Sim3:
+    """逆変換。`compose(invert(T), T)` が恒等"""
+    s, R, t = T
+    return (1.0 / s, R.T, -(R.T @ t) / s)
+
+
+def quat_to_rot(q) -> Mat3:
+    """クォータニオン (w, x, y, z) → 回転行列
+
+    **順序は w が先**。COLMAP の `images.bin` と PanoVGGT の中間出力が
+    どちらもこの順なので揃えてある。
+    """
+    w, x, y, z = q
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
+
+
 # ---------------------------------------------------------------- 重力整列
 
 def rotation_to_y(up: Vec3) -> Mat3:

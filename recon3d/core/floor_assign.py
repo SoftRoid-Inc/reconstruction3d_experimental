@@ -31,7 +31,7 @@ import argparse
 import json
 from typing import Any
 
-from recon3d.paths import Paths
+from recon3d.paths import Paths, floor_sort_key
 from recon3d.types import Island, Manifest
 
 
@@ -39,19 +39,9 @@ ASSIGN_NAME = "floor_assign.json"
 
 
 def floor_names(paths: Paths) -> list[str]:
-    """図面がある階を下から順に
-
-    B1F は地下なので負、RF/PH のように数字を持たない階名は末尾に送る
-    (int() 決め打ちだと ValueError で階の列挙ごと落ちていた)。
-    """
-    def key(s: str) -> tuple[int, int, str]:
-        d = "".join(c for c in s if c.isdigit())
-        if not d:
-            return (1, 0, s)        # 数字なし (RF, PH, ...) は最後
-        n = int(d)
-        return (0, -n if s.upper().startswith("B") else n, s)
-
-    return sorted((p.stem for p in paths.floors.glob("*.jpg")), key=key)
+    """図面画像がある階を下から順に (並べ方は `paths.floor_sort_key`)"""
+    return sorted((p.stem for p in paths.floors.glob("*.jpg")),
+                  key=floor_sort_key)
 
 
 def load(paths: Paths, name: str = ASSIGN_NAME) -> dict[str, Any] | None:

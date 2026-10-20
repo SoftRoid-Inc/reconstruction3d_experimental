@@ -16,11 +16,13 @@ from __future__ import annotations
 import graphlib
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Sequence, TypeVar, overload
+from typing import (TYPE_CHECKING, Any, Callable, Optional, Sequence,
+                    TypeVar, overload)
 
-from recon3d.core.caps import Caps
-from recon3d.paths import Paths
-from recon3d.types import Manifest, Opt
+if TYPE_CHECKING:   # 注釈専用。`main.py steps` に caps/numpy を引き込まない
+    from recon3d.core.caps import Caps
+    from recon3d.paths import Paths
+    from recon3d.types import Manifest, Opt
 
 _T = TypeVar("_T")
 
@@ -178,7 +180,7 @@ def _yaw_fix_rechain(ctx: Ctx, common: dict[str, Any],
         if not fixed and not (out / c.name).exists():
             (out / c.name).symlink_to(c)
     print("[yaw_fix] 済 → チェーンを修正チャンクで再実行")
-    ctx.chunks_dir = f"{ctx.chunks_dir}_yawfix"
+    ctx.chunks_dir = f"{ctx.chunks}_yawfix"
     ctx.tag_suffix = f"{var}_yawfix"
     return run_batch(ctx.paths, chunks_dir=ctx.chunks,
                      tag_suffix=ctx.tag_suffix, **common)
@@ -318,14 +320,16 @@ STEPS = {s.name: s for s in (
     Step("posegraph", "島ごとにポーズグラフ+ループ拘束で解き直す (→pg_タグ)",
          _posegraph, needs=("chains",),
          before=("eval", "mapany", "bridge", "anchor", "hier", "export")),
+    # ここまでは軌跡生成
     Step("eval", "GT軌跡とのATE + compare図", _eval, needs=("chains",),
          caps=("gt", "scale")),
+    # ここからは自動位置合わせを含めて開発中
     Step("mapany", "MapAnythingポーズ条件付け (→macondタグ)", _mapany,
          needs=("chains",)),
     Step("interp", "macond制御点×pvチェーン形状の全フレーム補間 (→mafタグ)",
          _interp, needs=("mapany",)),
     Step("bridge", "橋渡しで島を群れに結合 (以降は群れを対象にする)",
-         _bridge, needs=("chains",), before=("anchor", "hier", "export")),
+         _bridge, needs=("chains",), before=("anchor", "hier", "export")), # 悪化させる場合があるのでデフォルト無効化
     Step("anchor", "コーナーRANSACで図面アンカー", _anchor, needs=("chains",),
          caps=("anchor",)),
     Step("hier", "直接アンカー失敗島へ親から移送 (分割サブ島のみ)", _hier,

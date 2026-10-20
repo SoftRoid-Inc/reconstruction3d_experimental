@@ -20,9 +20,6 @@ from recon3d.types import Manifest
 #: 区間 (階名 or None, 開始フレーム, 終了フレーム)
 Seg: TypeAlias = "tuple[str | None, int, int]"
 
-#: 直近の `imu_segments` が置いた切断点 (build_manifest の fallback が読む)
-LAST_IMU_CUTS: list[tuple[int, int]] = []
-
 CHUNK_SIZE = 16
 CHUNK_STRIDE = 12          # 重なり = CHUNK_SIZE - CHUNK_STRIDE = 4フレーム
 
@@ -112,9 +109,9 @@ def idle_cuts(paths: Paths, n_frames: int) -> list[tuple[int, int]]:
     return out
 
 
-def imu_segments(paths: Paths, n_frames: int,
-                 use_idle: bool = True) -> list[Seg]:
-    """IMU階段検出 (imu.transitions, stairnet CNN) → [(None, a, b)]。GT不要
+def imu_segments(paths: Paths, n_frames: int, use_idle: bool = True
+                 ) -> tuple[list[Seg], list[tuple[int, int]]]:
+    """IMU階段検出 (imu.transitions, stairnet CNN) → ([(None, a, b)], 切断点)
 
     検出イベント(昇降)を切断点として区間を切る。stairnetは再現率が高い一方、
     工事現場のはしご・脚立で過検出するが、余分な切断は島が増えるだけで無害
@@ -154,20 +151,21 @@ def imu_segments(paths: Paths, n_frames: int,
         prev = b + 1
     if n_frames - 1 - prev + 1 >= MIN_ANCHOR_FRAMES:
         segs.append((None, prev, n_frames - 1))
-    # build_manifest の fallback が「切ってよい場所」を知るために使う。
-    # 関数属性だと型検査が通らないのでモジュール変数に置く
-    global LAST_IMU_CUTS
-    LAST_IMU_CUTS = cuts
-    return segs
+    # 切断点も返す。build_manifest の fallback が「切ってよい場所」を知るため
+    # (以前はモジュール変数に置いていたが、1プロセスで2データセットを回すと
+    #  前の回の切断点が残る。所在と同じく引数で配る)
+    return segs, cuts
 
 
 def build_manifest(paths: Paths, windows: Sequence[tuple[int, int]],
                    max_seg: int | None = None,
                    segments: Sequence[Seg] | None = None,
-                   prefix: str = "pv", tag_suffix: str = "") -> Manifest:
+                   prefix: str = "pv", tag_suffix: str = "",
+                   cuts: Sequence[tuple[int, int]] = ()) -> Manifest:
     """max_seg指定時: それより長い訪問区間を等分割する (長島ドリフト対策。
     タグは pv0925_1Fa1, 1Fa2… のように数字接尾辞)。
     segments: [(floor|None, a, b)] を外部注入可 (imu_segments等)。
+    cuts: 切ってはいけないフレーム域 (imu_segments の第2返り値)。
     floor=None の区間はタグ pv<sess>_sNN (階はアンカーステップで決める)"""
     segs = segments if segments is not None else gt_segments(paths)
     by_floor = {}
@@ -195,7 +193,6 @@ def build_manifest(paths: Paths, windows: Sequence[tuple[int, int]],
                 if len(ks_in) >= 2:
                     use = ks_in
                 else:   # 小さい区間: 重なるチャンクまで許容 (切断域は回避)
-                    cuts = LAST_IMU_CUTS
                     use = [k for k, (wa, wb) in enumerate(windows)
                            if wa < b2 + 1 and wb > a2
                            and not any(wa <= cb_ and wb - 1 >= ca_
@@ -261,12 +258,13 @@ def run_batch(paths: Paths, max_seg: int | None = None,
     dflt_dir, prefix = MODEL_DIRS[model]
     chunks_dir = chunks_dir or dflt_dir
     manifest_out = manifest_out or f"{prefix}_manifest.json"
-    n = len(sorted(paths.images.glob("frame_number_*.jpg")))
+    n = len(paths.frame_indices)
     entries = select_entries(paths, f"0:{n}:1")
     windows = chunk_windows(n, stride, chunk_size)
-    segs = imu_segments(paths, n, use_idle) if segments_source == "imu" else None
+    segs, cuts = (imu_segments(paths, n, use_idle)
+                  if segments_source == "imu" else (None, []))
     manifest = build_manifest(paths, windows, max_seg=max_seg, segments=segs,
-                              prefix=prefix, tag_suffix=tag_suffix)
+                              prefix=prefix, tag_suffix=tag_suffix, cuts=cuts)
     for m in manifest:
         print(f"{m['tag']}: frames {m['a']}-{m['b']} chunks {m['chunks'][0]}"
               f"..{m['chunks'][-1]}")
@@ -295,7 +293,7 @@ def stair_resplit(paths: Paths, manifest: Manifest,
     分割後の半島は「区間内に完全に収まるチャンク」のみ使う (階段チャンク排除)。
     """
     from recon3d.core.stair_check import find_stair, island_vertical
-    n = len(sorted(paths.images.glob("frame_number_*.jpg")))
+    n = len(paths.frame_indices)
     windows = chunk_windows(n, stride)
     out = []
     queue = [(m, 0) for m in manifest]
@@ -373,7 +371,7 @@ def stair_remerge(paths: Paths, manifest: Manifest,
     # 長島ドリフトで精度が落ちる。0428で 0.25m -> 0.99m の実例)
     if max_len is None:
         max_len = int(max_seg) if max_seg else 160
-    n = len(sorted(paths.images.glob("frame_number_*.jpg")))
+    n = len(paths.frame_indices)
     windows = chunk_windows(n, stride)
     manifest = sorted(manifest, key=lambda m: m["a"])
     tried = set()

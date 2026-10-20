@@ -21,7 +21,7 @@ _CACHE = {}
 
 
 def n_frames(paths):
-    return len(sorted(paths.images.glob("frame_number_*.jpg")))
+    return len(paths.frame_indices)
 
 
 def frame_times(paths, n=None):

@@ -22,10 +22,10 @@ from pathlib import Path
 import numpy as np
 
 from recon3d.core.chaining import load_chunk
-from recon3d.core.geometry import sim3_umeyama, apply
+from recon3d.core.geometry import apply, quat_to_rot, sim3_umeyama
 from recon3d.core.io_ply import read_ply_xyzrgb
 from recon3d.paths import Paths
-from recon3d.types import F64, Mat3, Points3
+from recon3d.types import Mat3, Points3
 
 
 def read_colmap_images_bin(path) -> dict:
@@ -50,14 +50,6 @@ def read_colmap_images_bin(path) -> dict:
     return out
 
 
-def qvec_to_R(q) -> Mat3:
-    w, x, y, z = q
-    return np.array([
-        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
-        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
-
-
 def colmap_centers(model_dir) -> tuple[dict[int, Points3], dict[int, Mat3]]:
     """{frame番号: カメラ中心(world)} と {frame番号: R(world→cam)}"""
     imgs = read_colmap_images_bin(Path(model_dir) / "images.bin")
@@ -68,7 +60,7 @@ def colmap_centers(model_dir) -> tuple[dict[int, Points3], dict[int, Mat3]]:
         if not digits:
             continue
         fr = int(digits)
-        R = qvec_to_R(q)
+        R = quat_to_rot(q)
         centers[fr] = -R.T @ t
         rots[fr] = R
     return centers, rots

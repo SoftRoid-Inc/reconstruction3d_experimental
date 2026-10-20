@@ -22,7 +22,7 @@ import shutil
 
 import numpy as np
 
-from recon3d.core.geometry import apply, sim3_umeyama
+from recon3d.core.geometry import apply, quat_to_rot, sim3_umeyama
 from recon3d.paths import Paths
 from recon3d.types import F64, Mat3
 
@@ -45,7 +45,7 @@ def _blend_rot(Ra: Mat3, Rb: Mat3, w: float) -> Mat3:
         qb = -qb
     q = (1 - w) * qa + w * qb
     q /= np.linalg.norm(q)
-    return _quat_to_r(q)
+    return quat_to_rot(q)
 
 
 def _quat(R: Mat3) -> F64:
@@ -58,14 +58,6 @@ def _quat(R: Mat3) -> F64:
     return np.array([w, (R[2, 1] - R[1, 2]) / (4 * w),
                      (R[0, 2] - R[2, 0]) / (4 * w),
                      (R[1, 0] - R[0, 1]) / (4 * w)])
-
-
-def _quat_to_r(q: F64) -> Mat3:
-    w, x, y, z = q
-    return np.array([
-        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
-        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
 
 
 def interp(paths: Paths, pv_tag: str, ma_tag: str, out_tag: str) -> None:

@@ -31,7 +31,7 @@ import numpy as np
 
 from recon3d.core.chunking import CHUNK_SIZE, imu_segments
 from recon3d.core.floor_assign import apply as apply_floor
-from recon3d.core.geometry import apply, compose, sim3_umeyama
+from recon3d.core.geometry import apply, compose, invert, sim3_umeyama
 from recon3d.core.panovggt import run_panovggt
 from recon3d.paths import Paths
 from recon3d.types import Island, Manifest, Mat3, Points3, Sim3, Vec3
@@ -39,14 +39,14 @@ from recon3d.types import Island, Manifest, Mat3, Points3, Sim3, Vec3
 
 
 def n_frames(paths: Paths) -> int:
-    return len(sorted(paths.images.glob("frame_number_*.jpg")))
+    return len(paths.frame_indices)
 
 
 def junctions(paths: Paths,
               segs: Sequence[tuple] | None = None
               ) -> list[tuple[int, int]]:
     """島の切れ目 [(a_end, b_start)]。segs は imu_segments の出力"""
-    segs = segs if segs is not None else imu_segments(paths, n_frames(paths))
+    segs = segs if segs is not None else imu_segments(paths, n_frames(paths))[0]
     return [(segs[i][2], segs[i + 1][1]) for i in range(len(segs) - 1)]
 
 
@@ -243,7 +243,7 @@ def bridge_transform(paths: Paths, a_end: int, b_start: int, mode: str
         return None, None
     sa, Ra, ta, _, _ = fa
     sb, Rb, tb, _, _ = fb
-    inv = (1.0 / sb, Rb.T, -(Rb.T @ tb) / sb)
+    inv = invert((sb, Rb, tb))
     return compose((sa, Ra, ta), inv), (ma["tag"], mb["tag"])
 
 
@@ -269,7 +269,7 @@ def transported(paths: Paths, a_end: int, b_start: int, mode: str
     sa, Ra, ta, _, _ = fa
     sb, Rb, tb, _, _ = fb
     kb = np.stack([cb[f] for f in sorted(cb)])
-    inv = (1.0 / sb, Rb.T, -(Rb.T @ tb) / sb)
+    inv = invert((sb, Rb, tb))
     return apply((sa, Ra, ta), apply(inv, kb)), (ma["tag"], mb["tag"])
 
 

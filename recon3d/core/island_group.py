@@ -81,13 +81,13 @@ def build_groups(paths: Paths, modes: Sequence[str] = MODES,
             c = consensus(paths, A["b"], B["a"], modes)
             Tba, _ = bridge_transform(paths, A["b"], B["a"], modes[0])
             why = (f"一致度 {c:.2f}m" if c is not None else "一致度 測定不能")
-        ok = c is not None and c < thresh and Tba is not None
+        link = Tba if (c is not None and c < thresh) else None
         if verbose:
             print(f"  {A['tag']} -> {B['tag']} [{kind}/"
                   f"{'またぎ' if cross else '同一'}] {why}"
-                  f"  -> {'繋ぐ' if ok else '切る'}")
-        if ok and Tba is not None:          # ok の時点で非None (型検査用)
-            T[B["tag"]] = compose(T[A["tag"]], Tba)
+                  f"  -> {'繋ぐ' if link is not None else '切る'}")
+        if link is not None:
+            T[B["tag"]] = compose(T[A["tag"]], link)
             cur.append(B)
         else:
             groups.append((cur, T))

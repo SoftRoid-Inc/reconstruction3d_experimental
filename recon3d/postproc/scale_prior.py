@@ -52,7 +52,7 @@ import numpy as np
 
 from recon3d.core.geometry import rotation_to_y
 from recon3d.paths import Paths
-from recon3d.types import I64, Points2, ScaleSource
+from recon3d.types import I64, Points2
 
 
 def island_xz(paths: Paths, tag: str) -> tuple[I64, Points2]:
@@ -76,18 +76,16 @@ def _fit_scale(paths: Paths, src_fr: I64, src_xy: Points2, dst_fr: I64,
         return None, len(common)
     a = src_xy[np.searchsorted(src_fr, common)]
     b = dst_xy[np.searchsorted(dst_fr, common)]
-    best: tuple[float, float] | None = None
-    for sgn in (1, -1):
+    cands = []
+    for sgn in (1, -1):              # 鏡像も試す
         x = a.copy()
         x[:, 1] *= sgn
         T = fit2d(x, b)
         e = float(np.median(np.linalg.norm(T(x) - b, axis=1)))
         s = float(np.linalg.norm(T(np.array([[1., 0.]]))
                                  - T(np.array([[0., 0.]]))))
-        if best is None or e < best[1]:
-            best = (s, e)
-    assert best is not None          # ループは必ず2回まわる
-    return best[0], len(common)
+        cands.append((e, s))
+    return min(cands)[1], len(common)
 
 
 def _mapany_tag(paths: Paths, tag: str, fr: I64) -> tuple[str | None, int]:

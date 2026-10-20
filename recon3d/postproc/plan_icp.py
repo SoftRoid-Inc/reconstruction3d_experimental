@@ -35,7 +35,7 @@ from recon3d.eval.gt_traj import mm_per_px, evaluate_track, load_gt
 from recon3d.core.plan_grid import RES_M, PlanGrid
 from recon3d.core.io_ply import read_ply_xyzrgb
 from recon3d.paths import Paths
-from recon3d.types import F64, Points2, Points3, Scalar
+from recon3d.types import F64, Points2, Scalar
 
 CELL_M = 0.05
 Y_BIN_M = 0.20           # 高さビン幅
@@ -160,7 +160,8 @@ def icp_to_walls(pts_cell: Points2, segs_cell: F64, s: Scalar,
     b = segs_cell[:, 2:]
     ab = b - a
     ab2 = (ab ** 2).sum(axis=1).clip(min=1e-9)
-    dmin = m = None
+    dmin = np.zeros(len(pts_cell))
+    m = np.zeros(len(pts_cell), dtype=bool)
     for it in range(ICP_ITERS):
         cutoff = ICP_CUTOFF_START + (ICP_CUTOFF_END - ICP_CUTOFF_START) \
             * it / max(ICP_ITERS - 1, 1)
@@ -189,8 +190,6 @@ def icp_to_walls(pts_cell: Points2, segs_cell: F64, s: Scalar,
         s = float(np.trace(np.diag(D) @ S) / (sc ** 2).sum() * len(sc))
         th = math.atan2(R2[1, 0], R2[0, 0])
         t = mu_d - s * R2 @ mu_s
-    if dmin is None or m is None:        # ICP_ITERS=0 など、1回も回らなかった
-        return s, th, t, float("nan")
     resid_m = float(np.median(dmin[m])) * RES_M if m.sum() else float("nan")
     return s, th, t, resid_m
 

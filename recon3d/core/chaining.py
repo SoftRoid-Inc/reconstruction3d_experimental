@@ -20,7 +20,7 @@ from typing import Sequence
 import numpy as np
 from scipy.spatial import cKDTree  # type: ignore[attr-defined]
 
-from recon3d.core.geometry import apply, compose, sim3_umeyama
+from recon3d.core.geometry import apply, compose, invert, sim3_umeyama
 from recon3d.core.geometry import rotation_to_y
 from recon3d.core.io_ply import read_ply_xyzrgb
 from recon3d.core.geometry import robust_yaw_median, rot_y
@@ -90,7 +90,7 @@ def lock_rotation(g_rots: Sequence[Mat3], cur_rots: F64) -> Mat3:
     「撮影中ヨーは一定」という仮定を置く。FlowStateの実測ヨーが使えるなら
     `lock_rotation_flowstate` の方が正確 (実測ではヨーは一定でなく±12°動く)。
     """
-    m_g, Rg_g = med_yaw(np.stack(list(g_rots)))
+    m_g, Rg_g = med_yaw(np.stack(g_rots))
     m_c, Rg_c = med_yaw(cur_rots)
     return Rg_g.T @ rot_y(m_g - m_c) @ Rg_c
 
@@ -125,7 +125,7 @@ def lock_rotation_flowstate(g_rots: Sequence[Mat3], g_names: Sequence[str],
 
     返り値: 回転行列。FlowStateが使えなければ None (呼び出し側が従来版へ)
     """
-    o_g, Rg_g = _gauge_offset(g_names, np.stack(list(g_rots)), fs_yaw)
+    o_g, Rg_g = _gauge_offset(g_names, np.stack(g_rots), fs_yaw)
     o_c, Rg_c = _gauge_offset(cur_names, cur_rots, fs_yaw)
     if o_g is None or o_c is None:
         return None
@@ -232,18 +232,6 @@ def load_chunk(cdir: Path) -> tuple:
     return names, cams["positions"], cams["poses"], pf, untrusted
 
 
-def _sim3_mul(A: Sim3, B: Sim3) -> Sim3:
-    """相似変換の合成 (Bを適用してからA)"""
-    sa, Ra, ta = A
-    sb, Rb, tb = B
-    return (sa * sb, Ra @ Rb, sa * (Ra @ tb) + ta)
-
-
-def _sim3_inv(T: Sim3) -> Sim3:
-    s, R, t = T
-    return (1.0 / s, R.T, -(R.T @ t) / s)
-
-
 def drift_correct(chunks: Sequence, T: list[Sim3], fs_yaw: F64,
                   min_links: int = 3) -> tuple[list[Sim3], float]:
     """連結で積み上がったヨーの**系統バイアス**だけを除く
@@ -276,11 +264,11 @@ def drift_correct(chunks: Sequence, T: list[Sim3], fs_yaw: F64,
     # 相対変換を取り出し、回転だけ -slope 補正して積み直す
     out = [T[0]]
     for k in range(1, len(T)):
-        rel = _sim3_mul(_sim3_inv(T[k - 1]), T[k])
+        rel = compose(invert(T[k - 1]), T[k])
         _, Rg = med_yaw(np.stack([T[k - 1][1] @ po[:3, :3]
                                   for po in chunks[k - 1][2]]))
         fix = Rg.T @ rot_y(slope) @ Rg
-        out.append(_sim3_mul(out[k - 1], (rel[0], fix @ rel[1], rel[2])))
+        out.append(compose(out[k - 1], (rel[0], fix @ rel[1], rel[2])))
     return out, slope
 
 

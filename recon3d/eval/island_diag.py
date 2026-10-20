@@ -78,7 +78,7 @@ def chunk_bounds(paths, tag):
     m = next((m for m in man if m["tag"] == tag), None)
     if m is None:
         return []
-    n = len(sorted(paths.images.glob("frame_number_*.jpg")))
+    n = len(paths.frame_indices)
     w = chunk_windows(n)
     return [w[k] for k in m["chunks"]]
 

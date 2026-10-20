@@ -38,10 +38,9 @@ def _anchor_one(args: tuple) -> tuple[str, str | None, float]:
     from recon3d.postproc.corners import corner_anchor
     paths = from_input(root)
     try:
-        res = corner_anchor(paths, tag, floor, s_prior=1.0, suffix=suffix,
-                            return_info=True, continuity_ref=cont)
-        assert isinstance(res, tuple)   # return_info=True なので組で返る
-        return tag, None, res[1].get("score", 0.0)
+        _, info = corner_anchor(paths, tag, floor, s_prior=1.0,
+                                suffix=suffix, continuity_ref=cont)
+        return tag, None, info.get("score", 0.0)
     except Exception as e:                          # noqa: BLE001
         return tag, f"{type(e).__name__}: {e}", 0.0
 

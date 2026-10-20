@@ -13,7 +13,7 @@ from scipy import ndimage
 from recon3d.paths import Paths
 from recon3d.plan2model.calibrate import scale_mm_per_px
 from recon3d.plan2model.loader import load_labelme
-from recon3d.types import BoolArr, F64
+from recon3d.types import BoolArr
 
 RES_M = 0.05            # グリッド解像度 (m/セル)
 SIGMA_WALL_M = 0.20     # 壁一致カーネル幅

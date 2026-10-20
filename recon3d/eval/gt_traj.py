@@ -73,6 +73,22 @@ def mm_per_px(paths):
               f": {e}) -> None")
         return None
 
+def mm_per_px_required(paths) -> float:
+    """メートル換算 [mm/px]。導出できなければ落とす
+
+    mm/px が決まらない入力 (図面の実寸なし) では「何メートルずれている」と
+    いう話が全部意味を失うので、黙って続けない。
+    `None` を許容したい呼び出し側 (図面幅で正規化する ext/ 評価など) は
+    `mm_per_px` をそのまま使うこと。
+    """
+    v = mm_per_px(paths)
+    if v is None:
+        raise SystemExit(
+            "図面の実寸が未設定なのでメートル換算できない "
+            f"({paths.floors}/meta.json の known_width_mm)")
+    return v
+
+
 # 階のフレーム範囲 (0828セッション。後方互換用。一般にはload_gtがCSVから導出)
 FLOOR_RANGES = [(0, 233, "1F"), (234, 411, "2F"), (412, 453, "1F")]
 

@@ -104,22 +104,14 @@ class Paths:
 
         `meta.json` は図面ではなく実寸の覚え書きなので外す。これを忘れると
         `load_floor` が prediction.json として読もうとして
-        `KeyError: image_size` になる。B1F は地下なので負、RF/PH のように
-        数字を持たない階名は末尾 (`core/floor_assign.floor_names` と同じ規則)。
+        `KeyError: image_size` になる。
         """
-        def key(name: str) -> tuple[int, int, str]:
-            d = "".join(c for c in name if c.isdigit())
-            if not d:
-                return (1, 0, name)
-            n = int(d)
-            return (0, -n if name.upper().startswith("B") else n, name)
-
         if not self.floors.is_dir():
             return []
         return [(p.stem, p) for p in
                 sorted((p for p in self.floors.glob("*.json")
                         if p.stem != "meta" and not p.stem.startswith("_")),
-                       key=lambda p: key(p.stem))]
+                       key=lambda p: floor_sort_key(p.stem))]
 
     @property
     def known_width_mm(self) -> float | dict[str, float] | None:
@@ -177,6 +169,21 @@ class Paths:
         """フレーム範囲の上限 (= 最大番号+1)。0枚なら 0"""
         idx = self.frame_indices
         return idx[-1] + 1 if idx else 0
+
+
+def floor_sort_key(name: str) -> tuple[int, int, str]:
+    """階名を下階から順に並べるキー
+
+    B1F は地下なので負、RF/PH のように数字を持たない階名は末尾へ送る
+    (`int()` 決め打ちだと ValueError で階の列挙ごと落ちていた)。
+    図面JSONの列挙 (`Paths.floor_jsons`) と図面画像の列挙
+    (`core.floor_assign.floor_names`) が同じ順になるよう、規則はここだけ。
+    """
+    d = "".join(c for c in name if c.isdigit())
+    if not d:
+        return (1, 0, name)        # 数字なし (RF, PH, ...) は最後
+    n = int(d)
+    return (0, -n if name.upper().startswith("B") else n, name)
 
 
 def from_input(root: PathLike) -> Paths:

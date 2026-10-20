@@ -477,13 +477,14 @@ Track: TypeAlias = "dict[str, tuple[float, float]]"
 def corner_anchor(paths: Paths, tag: str, floor: str,
                   ref_tag: str | None = None, cont_max_m: float = 4.0,
                   mpu: float | None = None, s_prior: float | None = None,
-                  suffix: str = "_corners", return_info: bool = False,
+                  suffix: str = "_corners",
                   mpu_source: str = "mapany", sweep=S_SWEEP,
                   continuity_ref: bool = False
-                  ) -> Track | tuple[Track, dict[str, Any]]:
+                  ) -> tuple[Track, dict[str, Any]]:
     """島をコーナーRANSAC照合でアンカーし、壁ICPで精密化して保存する
 
-    `return_info=True` のときだけ (track, 指標) の組を返す。
+    返り値は (フレーム→図面px, 指標)。指標が要らない呼び出しは捨てればよい
+    — 引数で戻り型が変わると、呼び出し側が毎回 `isinstance` で確かめる羽目になる。
 
     ref_tag: スケール事前用の配置済み島 (スラブ推定の比。無ければ事前なし)
     cont_max_m: 時系列連続性フィルタ。既存trajectory.jsonの島フレームのうち
@@ -546,12 +547,8 @@ def corner_anchor(paths: Paths, tag: str, floor: str,
             return 0.0
         j, xy, _, _ = cont_ref
         px = cells_to_px(transform_pts(cam_rc[j][None], s_, th_, t_), grid)[0]
-        from recon3d.eval.gt_traj import mm_per_px
-        mpx = mm_per_px(paths)
-        if mpx is None:
-            raise SystemExit(
-                "連続性拘束にはメートル換算が要る (図面の実寸が未設定)")
-        return math.dist(px, xy) * mpx / 1000
+        from recon3d.eval.gt_traj import mm_per_px_required
+        return math.dist(px, xy) * mm_per_px_required(paths) / 1000
 
     zz2, xx2 = np.nonzero(d["density"] > 0.15)
     wall_pts = np.stack([zz2, xx2], axis=1).astype(np.float64)
@@ -628,13 +625,11 @@ def corner_anchor(paths: Paths, tag: str, floor: str,
     (paths.backend / f"corner_anchor_{tag}.json").write_text(
         json.dumps(track, indent=1))
     print(f"-> anchor_{tag}{suffix}.json / corner_anchor_{tag}.json")
-    if return_info:
-        return track, {"score": float(best[0]), "margin": margin,
-                       "wall_cover": float(v["precision"]),
-                       "wall_recall": float(v["recall"]),
-                       "wall_resid_m": resid,
-                       "n_inliers": int(n_in), "floor": floor, "anchor": out}
-    return track
+    return track, {"score": float(best[0]), "margin": margin,
+                   "wall_cover": float(v["precision"]),
+                   "wall_recall": float(v["recall"]),
+                   "wall_resid_m": resid,
+                   "n_inliers": int(n_in), "floor": floor, "anchor": out}
 
 
 def main(paths: Paths, argv: list[str] | None = None) -> None:
