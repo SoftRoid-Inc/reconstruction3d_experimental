@@ -58,26 +58,11 @@ def build_model(floor_paths, cfg, out_dir):
 
 
 def floors_from_paths(paths):
-    """入力契約から (階名, JSONパス) を下階から順に返す
-
-    階名は数字でソートする。B1F は地下なので負、数字を持たない階名 (RF/PH)
-    は末尾へ (core/floor_assign.floor_names と同じ規則)。
-    """
-    def key(name):
-        d = "".join(c for c in name if c.isdigit())
-        if not d:
-            return (1, 0, name)
-        n = int(d)
-        return (0, -n if name.upper().startswith("B") else n, name)
-
-    # `meta.json` は図面ではなく実寸の覚え書き。`*.json.raw` 等の控えは
-    # suffix が .json にならないので glob の時点で外れる
-    cands = sorted((p for p in paths.floors.glob("*.json")
-                    if p.stem not in ("meta",) and not p.stem.startswith("_")),
-                   key=lambda p: key(p.stem))
+    """入力契約から (階名, JSONパス文字列) を下階から順に返す"""
+    cands = paths.floor_jsons()
     if not cands:
         raise SystemExit(f"間取り図のJSONが無い: {paths.floors}")
-    return [(p.stem, str(p)) for p in cands]
+    return [(name, str(p)) for name, p in cands]
 
 
 def build_from_paths(paths, out_dir=None):

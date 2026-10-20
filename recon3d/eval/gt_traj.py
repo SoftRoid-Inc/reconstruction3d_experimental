@@ -36,13 +36,10 @@ def _plan_json(paths):
     「1F」決め打ちをやめた。B1F や 2F から始まる部分スキャンでは 1F.json が
     存在せず、黙って mm/px=None に落ちていた。
     """
-    if not paths.floors.is_dir():
-        return None
-    cands = sorted(p for p in paths.floors.glob("*.json") if len(p.stem) <= 4)
+    cands = paths.floor_jsons()
     if not cands:
         return None
-    pick = next((p for p in cands if p.stem == "1F"), cands[0])
-    return pick.stem, pick
+    return next((c for c in cands if c[0] == "1F"), cands[0])
 
 
 @functools.lru_cache(maxsize=None)

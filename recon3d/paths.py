@@ -94,6 +94,28 @@ class Paths:
         _check_meta(p, m)
         return m
 
+    def floor_jsons(self):
+        """間取り図の labelme JSON を**下階から順に**返す [(階名, Path)]
+
+        `meta.json` は図面ではなく実寸の覚え書きなので外す。これを忘れると
+        `load_floor` が prediction.json として読もうとして
+        `KeyError: image_size` になる。B1F は地下なので負、RF/PH のように
+        数字を持たない階名は末尾 (`core/floor_assign.floor_names` と同じ規則)。
+        """
+        def key(name):
+            d = "".join(c for c in name if c.isdigit())
+            if not d:
+                return (1, 0, name)
+            n = int(d)
+            return (0, -n if name.upper().startswith("B") else n, name)
+
+        if not self.floors.is_dir():
+            return []
+        return [(p.stem, p) for p in
+                sorted((p for p in self.floors.glob("*.json")
+                        if p.stem != "meta" and not p.stem.startswith("_")),
+                       key=lambda p: key(p.stem))]
+
     @property
     def known_width_mm(self):
         """階名→mm の辞書、数値ひとつ、または None"""

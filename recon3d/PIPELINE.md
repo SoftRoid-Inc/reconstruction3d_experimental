@@ -147,7 +147,7 @@ flowchart LR
 > 順序は依存グラフが決めるので、書く順は関係ない。
 
 ### 段1: prep — 入力の準備
-入力の `imu/*.json` `imu/*.npz` を `results/<session>/imu/` へ**コピー**する
+入力の `imu/*.json` `imu/*.npz` を `results/imu/` へ**コピー**する
 (`core/ingest.materialize_imu`)。取り込んだ名前は `_materialized.json` に
 記録し、次回はそれを消してから張り直す — `core/chunking.imu_segments` は
 `exists()` しか見ないので、古いコピーが残ると入力を差し替えても永久に
@@ -424,14 +424,13 @@ python main.py inspect input=ext/sfm11196
 python main.py run     input=ext/sfm11196 'steps=[chains]'
 ```
 
-セッション名は `ext/sfmXXXX/meta.json` の `session` (例 `e11196`) が使われ、
-出力は従来どおり `ext/sfmXXXX/results/e11196/`。過去の評価結果の集計は
-`out/ext_report.py` に残してある。
+島タグの接頭辞は入力ディレクトリ名 (`sfm11196` → `pvsfm11196_s001`)、
+出力は `ext/sfm11196/results/`。
 
 > **図面の壁アノテーションが無い**ので図面アンカーは評価できない。
 > GT軌跡だけで測れるもの (島の形状品質・橋渡し・カバレッジ) に限られる。
 > **ディスクが律速**: 1件あたり画像0.4GB + チャンク13GB。評価が済んだら
-> `results/<sess>/pcd/` と `images/` を消すこと。
+> `results/pcd/` と `images/` を消すこと。
 
 ---
 
