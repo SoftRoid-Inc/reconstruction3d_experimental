@@ -75,7 +75,10 @@ def inspect(overrides: List[str] = ARG):
     from recon3d.core.caps import main as caps_main
     from recon3d.paths import from_input
     paths = from_input(d["input"])
-    caps_main(paths)                      # 能力の内訳をそのまま出す
+    # argv=[] を渡すこと。既定の None だと caps_main 内の argparse が
+    # sys.argv を読み、typer が食い終わった "inspect input=..." を
+    # 自分への引数だと思って usage で落ちる
+    caps_main(paths, [])                  # 能力の内訳をそのまま出す
     typer.echo("")
     typer.echo("実行できる段: " + (" -> ".join(order) or "(なし)"))
     for k, v in skip.items():

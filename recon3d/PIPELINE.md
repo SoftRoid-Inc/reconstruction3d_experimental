@@ -14,12 +14,11 @@
 
 ```mermaid
 flowchart TD
-    IMG(["360°フレーム<br/>5376×2688"]):::data
-    PLAN(["間取り図<br/>labelme GT"]):::data
-    IMU(["IMU / GT階ラベル"]):::data
+    IMG(["360°フレーム<br/>images/<br/>5376×2688"]):::data
+    MASKD(["人物マスク<br/>masks/<br/>白=有効"]):::data
+    IMU(["IMU派生物<br/>imu/<br/>transitions / idle_spans"]):::data
+    PLAN(["間取り図<br/>floors/<br/>labelme 壁注釈<br/>+ meta.json 実寸"]):::data
 
-    MASK["人物マスク生成<br/>seg_ade20k"]:::proc
-    MASKD(["人物マスク"]):::data
     SEG["区間計画<br/>階段検出 or 階ラベル"]:::proc
     CHUNK["チャンク分割<br/>16枚 / stride 12"]:::proc
     INFER["PanoVGGT 推論<br/>1036×518 / bf16<br/>9.4秒/チャンク"]:::proc
@@ -31,26 +30,69 @@ flowchart TD
     GRP(["群れ"]):::data
     DENS["密度地図づくり<br/>壁の高さ帯で絞る"]:::proc
     DENSD(["密度地図"]):::data
+
+    MA["MapAnything 条件付け<br/>mapany (任意)"]:::proc
+    MACOND(["macond 島<br/>ほぼメートル"]):::data
+    SP["スケール事前<br/>scale_prior.m_per_unit"]:::proc
+    MPU(["m_per_unit<br/>島のメートル尺度"]):::data
+    CALIB(["scale_bias.json<br/>較正"]):::data
+
     ANCHOR["図面アンカー<br/>コーナーRANSAC + 壁ICP"]:::proc
     OUT(["図面座標の軌跡<br/>+ 整列点群"]):::data
 
-    IMG --> MASK --> MASKD --> CHUNK
     IMG --> CHUNK
+    MASKD --> CHUNK
     IMU --> SEG --> CHUNK
     CHUNK --> INFER --> CHUNKD
     CHUNKD --> CHAIN --> ISL
-    CHUNKD --> PG --> ISL
+    CHUNKD -.-> PG -.-> ISL
     ISL --> DENS --> DENSD --> ANCHOR
     PLAN --> ANCHOR
+    ISL --> SP --> MPU --> ANCHOR
+    ISL -.-> MA -.-> MACOND -.-> SP
+    CALIB -.-> SP
     ANCHOR --> OUT
+    ANCHOR -. "2周目以降" .-> CALIB
     ISL -.-> BRIDGE -.-> GRP -.-> ANCHOR
 
     classDef data fill:#e8f0fe,stroke:#4a76c8,stroke-width:1.5px,color:#13305e
     classDef proc fill:#fff3e0,stroke:#c8792a,stroke-width:1.5px,color:#5e3a13
 ```
 
-点線は**既定では通らない経路** (橋渡しは `steps` に `bridge` を入れたときだけ)。
-各段のパラメータは **5章** に一覧がある。
+点線は**既定では通らない経路** (ポーズグラフ・MapAnything・橋渡しは
+`steps` に入れたときだけ)。各段のパラメータは **5章** に一覧がある。
+
+### アンカーの入力は図面だけではない
+
+図面アンカーは **(1) 密度地図 (2) 間取り図 (3) `m_per_unit`** の3つを食う。
+3つ目を見落としやすいので明示しておく。
+
+`match_corners` は事前スケールの **±40% しか探索しない**ので、`m_per_unit` が
+ずれていると**正解の仮説がそもそも生成されない**。供給源は3つで、精度が桁違い:
+
+| 供給源 | 誤差 (0912実測) | 中身 | いつ使われるか |
+|---|---|---|---|
+| `calib` | 1%以内 | `backend/scale_bias.json` | **最優先**。あれば使う |
+| `mapany` | **5〜25%** | macond 島のカメラ軌跡との相似フィット | macond タグがあれば |
+| `slab` | **97〜383%** | カメラ高 / 床スラブピーク | 上2つが無いときの最後の砦 |
+
+> **MapAnything の点群は使っていない。** 使うのは**スケール係数1つだけ**
+> (島のカメラ軌跡と macond 軌跡の相似フィット)。点群の床検出に依存しないので
+> `slab` より桁違いに安定する。
+
+較正は GT 無しで回せる。アンカー後の相似スケール `s` が事前の誤りをそのまま
+表すので、**補正後 = 事前 × s** が実測1%以内で成立する:
+
+```bash
+# 1周目: macond を作ってアンカー (mapany 事前)
+python main.py run input=/data/x 'steps=[mapany,anchor]'
+# 較正ファイルを書く
+python main.py tool scale_prior --input /data/x --calibrate
+# 2周目以降: MapAnything 無しでも良い事前が使える
+python main.py run input=/data/x 'steps=[anchor,export]'
+```
+
+`main.py inspect` の `scale_prior` 行が、その入力で実際にどれに落ちるかを出す。
 
 ### 用語
 
@@ -115,6 +157,7 @@ python main.py inspect input=/data/reconstruction
 | `imu_segments` | `imu/transitions.json` | `segments=imu` が不可 |
 | `floors` | `floors/*.json` に `label=wall` | アンカー不可 |
 | `scale` | `known_width_mm` or `mm_per_px` | アンカー不可・評価不可 |
+| `scale_prior` | `backend/scale_bias.json` または `macond*` タグ | **止めない**。`slab` 事前 (誤差97〜383%) に落ちるので当たりにくくなる |
 | `gt` | `trajectory_points.csv` | 評価段を skip |
 | `floor_assign` | `backend/floor_assign.json` | 階未割当の島はアンカーを skip |
 
@@ -136,6 +179,7 @@ flowchart LR
     chains --> anchor["anchor"]:::proc
     pg -.->|選べば以降が<br/>pg_タグを使う| bridge
     bridge -.->|両方選んだら<br/>bridge が先| anchor
+    mapany -. "macond をスケール事前に<br/>(依存として宣言していない)" .-> anchor
     anchor --> hier["hier"]:::proc
     anchor --> export["export"]:::proc
 
@@ -145,6 +189,12 @@ flowchart LR
 > 旧 `--post a,b,c` は**書いた順**に実行していたので、`--post anchor,bridge`
 > と書くと群れ化の前に anchor が走り、指定した意味が出なかった。
 > 順序は依存グラフが決めるので、書く順は関係ない。
+
+> **`mapany` → `anchor` は `needs` で宣言していない**。macond が無ければ
+> `slab` 事前に落ちて**動いてしまう**からで、必須にすると図面だけある物件
+> (MapAnything を回せない / 回したくない) でアンカーが止まる。
+> その代わり `main.py inspect` の `scale_prior` 行で、どの事前に落ちるかを
+> 必ず見えるようにしてある。
 
 ### 段1: prep — 入力の準備
 入力の `imu/*.json` `imu/*.npz` を `results/imu/` へ**コピー**する

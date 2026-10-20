@@ -255,13 +255,21 @@ def m_per_unit(paths, tag, source="mapany", fallback="slab",
 
 
 def main(paths, argv=None):
-    """供給源ごとの m_per_unit を島別に並べる (gt があれば比も出す)"""
+    """供給源ごとの m_per_unit を島別に並べる / アンカー結果から較正する"""
     import argparse
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=main.__doc__)
     ap.add_argument("--manifest", default="pv_full_manifest.json")
     ap.add_argument("--sources", nargs="*", default=list(SOURCES))
+    ap.add_argument("--calibrate", action="store_true",
+                    help="アンカー済みの島から scale_bias.json を書く。"
+                         "以降は MapAnything 無しでも良い事前が使える")
+    ap.add_argument("--suffix", default="_corners",
+                    help="--calibrate が読むアンカーjsonの接尾辞")
     args = ap.parse_args(argv)
     man = json.loads((paths.bench / args.manifest).read_text())
+    if args.calibrate:
+        calibrate(paths, [m["tag"] for m in man], suffix=args.suffix)
+        return
     print(f"{'island':16} " + " ".join(f"{s:>10}" for s in args.sources)
           + "   (gt比)")
     for m in man:

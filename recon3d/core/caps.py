@@ -70,6 +70,8 @@ DESC = {
     "floors": "間取り図の壁注釈 (floors/*.json、labelme形式)",
     "scale": "図面の実寸 (floors/meta.json の known_width_mm)",
     "anchor": "図面アンカー = floors + scale の両方",
+    "scale_prior": "島のメートル尺度の供給源 (backend/scale_bias.json "
+                   "または macond タグ)",
     "gt": "GT軌跡 (trajectory_points.csv)",
     "floor_assign": "島→階の手動割当 (backend/floor_assign.json)",
 }
@@ -160,6 +162,20 @@ def detect(paths):
         miss = [k for k in ("floors", "scale") if k not in c.have]
         c.why["anchor"] = " / ".join(c.reason(k) for k in miss)
 
+    # アンカーの候補生成は事前スケールの ±40% しか探索しないので、
+    # m_per_unit がずれていると**正解の仮説がそもそも作られない**。
+    # 既定の slab (カメラ高/床スラブピーク) は0912実測で誤差97〜383%。
+    # 動きはするが黙って悪くなるので、どの供給源が使えるかを出す
+    src = scale_prior_source(paths)
+    if src == "slab":
+        c.why["scale_prior"] = (
+            "mapany も較正も無いので slab (カメラ高/床スラブ) に落ちる — "
+            "0912実測で誤差97〜383%。アンカーは動くが当たりにくい。"
+            "steps に mapany を入れて macond を作るか、1度アンカーを通して "
+            "`main.py tool scale_prior --calibrate` で scale_bias.json を書く")
+    else:
+        c.have.add("scale_prior")
+
     if _has_gt(paths):
         c.have.add("gt")
     else:
@@ -173,6 +189,19 @@ def detect(paths):
             "島→階の割当が無い。`python -m recon3d.core.floor_assign "
             "--template` で雛形を作って backend/floor_assign.json を編集")
     return c
+
+
+def scale_prior_source(paths):
+    """アンカーが実際に使う m_per_unit の供給源 ("calib"/"mapany"/"slab")
+
+    優先順は postproc/scale_prior.m_per_unit と同じ:
+    ①島自身のアンカー由来の較正 ②MapAnything条件付け出力 ③床スラブ推定
+    """
+    if (paths.backend / "scale_bias.json").exists():
+        return "calib"
+    if paths.bench.is_dir() and next(paths.bench.glob("macond*"), None):
+        return "mapany"
+    return "slab"
 
 
 def _has_gt(paths):
@@ -190,7 +219,9 @@ def main(paths, argv=None):
     print(f"frames  {len(paths.frame_indices)}枚  (0..{paths.n_frames - 1})")
     for k in DESC:
         ok = k in c.have
-        print(f"  [{'x' if ok else ' '}] {k:13} {DESC[k]}")
+        note = (f" -> {scale_prior_source(paths)}"
+                if k == "scale_prior" else "")
+        print(f"  [{'x' if ok else ' '}] {k:13} {DESC[k]}{note}")
         if not ok:
             print(f"        -> {c.reason(k)}")
 
