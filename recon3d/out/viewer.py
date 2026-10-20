@@ -3,7 +3,7 @@
 - aligned_house_check.png: 1F/2F の真上ビュー (点群RGB + 図面壁中心線=シアン)
 - viewer.html: WebGL単体ファイルビューア (uint16量子化 + base64埋め込み)
 
-使い方: python -m recon3d.out.viewer   (export_aligned2 の後に実行)
+使い方: python main.py tool viewer --input /data/x   (export_aligned2 の後に実行)
 """
 import base64
 import json

@@ -15,7 +15,7 @@
   青線 = カメラ軌跡 (同じセル座標)
 
 使い方:
-  IMG_SESSION=0912 python -m recon3d.eval.density_view
+  python main.py tool density_view --input /data/x
 出力: <物件>/results/<sess>/backend/density_islands.png
 """
 import argparse

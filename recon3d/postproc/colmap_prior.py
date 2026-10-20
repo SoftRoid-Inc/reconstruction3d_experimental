@@ -8,7 +8,7 @@ COLMAPカメラ中心へ個別にSim(3)フィットすれば、チャンク間�
 出力: chain_chunksと同形式 (frontend_bench/<tag>/global_{cameras.npz,points.ply})
 なので、既存の図面アンカー・開口/コーナー精密化・評価がそのまま使える。
 
-使い方: python -m recon3d.postproc.colmap_prior --model <sparse/0> \
+使い方: python main.py tool colmap_prior --input /data/x --model <sparse/0> \
           --chunks-root results/pcd/chunks_0312 --islands A:0:10 B:11:19 C:20:22
 """
 import argparse

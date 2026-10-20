@@ -1,8 +1,15 @@
 """物件の複数階GT/predictionから3Dモデル一式(glb/obj/report.json)を生成する。
 
-使い方(コンテナ内):
-  python -m recon3d.build --floors 1F=/code2/.../1F.json 2F=/code2/.../2F.json \
-      --width-mm 9100 --depth-mm 9555 --out /code2/reconstruction_3d/recon3d/output/28-AAAAA
+撮影データは要らず `floors/` だけで走るので、パイプラインのステップでは
+なく独立したサブコマンドにしてある。
+
+使い方:
+  python main.py plan2model build  input=/data/x
+  python main.py plan2model verify input=/data/x     # 2D再投影IoU
+
+階の一覧・図面の実寸・出力先はすべて入力ディレクトリから決まる
+(`floors/*.json` と `floors/meta.json` の `known_width_mm`、
+ 出力は `<input>/results/plan2model/`)。
 """
 import argparse
 import json

@@ -10,10 +10,10 @@
 反射(図面座標への写像は常にdet<0)を扱うため、TSDFは島座標で積分し、
 最後にメッシュごと図面座標へ写して三角形の巻き順を反転する。
 
-実行 (env=panovggt):
-  IMG_SESSION=0312 conda run -n panovggt python -m recon3d.mesh.meshing verify
-  IMG_SESSION=0312 conda run -n panovggt python -m recon3d.mesh.meshing tsdf
-  IMG_SESSION=0312 conda run -n panovggt python -m recon3d.mesh.meshing poisson
+実行 (open3d が要る。recon3d イメージには入れていないので別コンテナ):
+  python main.py tool meshing --input /data/x verify
+  python main.py tool meshing --input /data/x tsdf
+  python main.py tool meshing --input /data/x poisson
 """
 import argparse
 import json

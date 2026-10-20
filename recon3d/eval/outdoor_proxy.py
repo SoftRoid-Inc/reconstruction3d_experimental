@@ -12,7 +12,7 @@
 屋外では上半球が空で埋まり、室内では天井 (白〜木目=青くない) になる。
 
 使い方:
-  IMG_SESSION=0925 python -m recon3d.eval.outdoor_proxy
+  python main.py tool outdoor_proxy --input /data/x
 出力: backend/outdoor_proxy.json (島ごとの屋外率)
 """
 import argparse

@@ -13,8 +13,8 @@
 付近では混ざるので、全部屋外である必要はない (OUTDOOR_FRAC を超えたら除外)。
 
 使い方:
-  IMG_SESSION=0925 python -m recon3d.eval.outdoor_label
-  IMG_SESSION=0925 python -m recon3d.eval.outdoor_label --frac 0.3
+  python main.py tool outdoor_label --input /data/x
+  python main.py tool outdoor_label --input /data/x --frac 0.3
 """
 import argparse
 import json

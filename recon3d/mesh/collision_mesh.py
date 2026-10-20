@@ -9,7 +9,7 @@
 
 副産物: 視覚確認用のPoissonメッシュ (色付き)。
 
-実行: IMG_SESSION=0312 conda run -n panovggt python -m recon3d.mesh.collision_mesh
+実行: python main.py tool collision_mesh --input /data/x  (open3d が要る)
 出力: results/backend/collision_<sess>.{glb,obj} / mesh_visual_<sess>.ply /
       collision_check_<sess>.png
 """

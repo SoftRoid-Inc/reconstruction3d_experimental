@@ -18,9 +18,9 @@
 を併用すると速い。
 
 使い方:
-  IMG_SESSION=0912 python -m recon3d.core.floor_assign --template
+  python main.py tool floor_assign --input /data/x --template
       → 現在の島を並べた雛形を出力 (これを編集して保存する)
-  IMG_SESSION=0912 python -m recon3d.core.floor_assign --check
+  python main.py tool floor_assign --input /data/x --check
       → 割当の妥当性を確認 (未割当の島、図面に無い階名)
   pipeline run --session 0912 --segments imu --post anchor,hier,export
       → マニフェスト読み込み時に自動適用される
@@ -139,7 +139,13 @@ def main(paths, argv=None):
     g.add_argument("--template", action="store_true", help="雛形を出力")
     g.add_argument("--check", action="store_true", help="割当を確認")
     args = ap.parse_args(argv)
-    manifest = json.loads((paths.bench / args.manifest).read_text())
+    mp = paths.bench / args.manifest
+    if not mp.exists():
+        raise SystemExit(
+            f"島マニフェストが無い: {mp}\n"
+            f"  先に chains ステップを回すこと: "
+            f"python main.py run input={paths.root} 'steps=[chains]'")
+    manifest = json.loads(mp.read_text())
     if args.template:
         template(paths, manifest, args.name)
     else:

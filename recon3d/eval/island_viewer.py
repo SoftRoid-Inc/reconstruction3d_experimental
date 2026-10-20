@@ -10,7 +10,7 @@ spanの中央値が0.6〜1.0m**しかなく、天井まで届くセルは0〜7%�
 色は既定で高さ (床=青 → 天井=赤)。--rgb で元の色に戻せる。
 
 使い方:
-  IMG_SESSION=0925 python -m recon3d.eval.island_viewer --islands pv0925_s003r2
+  python main.py tool island_viewer --input /data/x --islands pv0925_s003r2
 出力: <物件>/results/<sess>/backend/island_viewer_<tag>.html
 """
 import argparse

@@ -10,8 +10,8 @@
 橋が壊れたときに鏡映の選択まで引きずられる)。
 
 使い方:
-  IMG_SESSION=0925 python -m recon3d.eval.bridge_view
-  IMG_SESSION=0925 python -m recon3d.eval.bridge_view --modes n8s1 --junction 916:935
+  python main.py tool bridge_view --input /data/x
+  python main.py tool bridge_view --input /data/x --modes n8s1 --junction 916:935
 出力: <物件>/results/<sess>/backend/bridge_<a>_<b>_<mode>.png
 """
 import argparse

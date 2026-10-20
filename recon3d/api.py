@@ -5,7 +5,7 @@
                   chunking={"max_seg": 160})
 
 入力は**固定構造の1ディレクトリ**で、それがデータセットそのもの。
-`Paths` を組み立てて各段へ引数で配るだけなので、環境変数もモジュール凍結も
+`Paths` を組み立てて各ステップへ引数で配るだけなので、環境変数もモジュール凍結も
 使わない — 渡し忘れは `TypeError` で即座に出る。
 
 1ポッド=1データセット (Kubernetes / Dagster Pipes) を前提にしているので、
@@ -22,14 +22,14 @@ class RunResult:
     root: str
     results_dir: str
     steps: list = field(default_factory=list)
-    skipped: dict = field(default_factory=dict)   # 能力不足で飛ばした段と理由
+    skipped: dict = field(default_factory=dict)   # 能力不足で飛ばしたステップと理由
     islands: list = field(default_factory=list)
 
 
 def run(input_dir, steps=None, **opt) -> RunResult:
-    """段を実行する。失敗は例外のまま伝播させる
+    """ステップを実行する。失敗は例外のまま伝播させる
 
-    能力不足で実行できない段があれば `steps.plan` が `SystemExit` を上げる
+    能力不足で実行できないステップがあれば `steps.plan` が `SystemExit` を上げる
     (メッセージ付きで非ゼロ終了するので、pipe 側が失敗として扱える)。
     """
     from recon3d.steps import DEFAULT_STEPS, execute

@@ -24,8 +24,8 @@
 ①の視覚相対ヨーとして既に取り込まれている。
 
 使い方:
-  IMG_SESSION=0925 python -m recon3d.core.posegraph --from-tag pv0925_s002
-  IMG_SESSION=0616 python -m recon3d.core.posegraph --chunks 0 1 2 3 --tag pg_test
+  python main.py tool posegraph --input /data/x --from-tag pv0925_s002
+  python main.py tool posegraph --input /data/x --chunks 0 1 2 3 --tag pg_test
 出力: frontend_bench/<tag>/ (chaining と同契約)
 """
 import argparse

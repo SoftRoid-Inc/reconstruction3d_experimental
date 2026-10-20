@@ -12,8 +12,8 @@
   4. 一致度が高いビンの連続区間 = 壁の帯
 
 使い方:
-  IMG_SESSION=0925 python -m recon3d.eval.wall_band_probe
-  IMG_SESSION=0925 python -m recon3d.eval.wall_band_probe --islands pv0925_s004
+  python main.py tool wall_band_probe --input /data/x
+  python main.py tool wall_band_probe --input /data/x --islands pv0925_s004
 """
 import argparse
 import json

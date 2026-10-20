@@ -19,7 +19,7 @@
 # 入力ディレクトリ (必須)。これがデータセットそのもの
 input: null
 
-# 走らせる段。前提は自動で補われる (anchor -> prep, chains も走る)。
+# 走らせるステップ。前提は自動で補われる (anchor -> prep, chains も走る)。
 # 一覧は `python main.py steps`
 steps: [prep, chains, anchor, export]
 

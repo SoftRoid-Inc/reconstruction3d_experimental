@@ -18,8 +18,8 @@ stride 2〜4 なので条件が違うが、成立するかは実測で確かめ�
   both  : 両端を厚めに取りつつ中間も拾う
 
 使い方:
-  IMG_SESSION=0912 python -m recon3d.core.bridge --list
-  IMG_SESSION=0912 python -m recon3d.core.bridge --junction 237:278 --mode span
+  python main.py tool bridge --input /data/x --list
+  python main.py tool bridge --input /data/x --junction 237:278 --mode span
 """
 import argparse
 import json

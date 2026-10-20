@@ -165,7 +165,7 @@ def main():
     rc |= bool(sig)
 
     ds = default_steps_match()
-    print(f"[{'OK' if not ds else 'NG'}] 既定の段が yaml と一致すること"
+    print(f"[{'OK' if not ds else 'NG'}] 既定のステップが yaml と一致すること"
           + (f" — {ds}" if ds else ""))
     rc |= bool(ds)
     return rc
@@ -175,7 +175,7 @@ def default_steps_match():
     """`steps.DEFAULT_STEPS` と `conf/recon.yaml` の `steps` のずれ
 
     CLI は yaml を、`api.run(x)` は DEFAULT_STEPS を見る。ずれると
-    「同じことをしたつもりが別の段が走る」ので、片方だけ直すのを防ぐ。
+    「同じことをしたつもりが別のステップが走る」ので、片方だけ直すのを防ぐ。
     yaml は hydra 無しでも読めるよう素のテキストから拾う。
     """
     import re

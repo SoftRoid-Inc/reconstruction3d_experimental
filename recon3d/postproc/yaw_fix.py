@@ -8,7 +8,7 @@ Insta360のFlowState方位ロックにより、全フレームの向きは世界
 処理: cameras.npz のpose回転を修正し、per-frameローカル点群を修正後poseで
 world合成して points.ply を作り直す。修正不要チャンクはsymlinkで共有。
 
-使い方: python -m recon3d.postproc.yaw_fix [--chunks 0,1,2,3,4]
+使い方: python main.py tool yaw_fix --input /data/x [--chunks 0,1,2,3,4]
 出力: results/pcd/chunks_yawfix/chunk_XX/
 """
 import argparse

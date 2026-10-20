@@ -106,7 +106,7 @@ def imu_segments(paths, n_frames, use_idle=True):
     検出イベント(昇降)を切断点として区間を切る。stairnetは再現率が高い一方、
     工事現場のはしご・脚立で過検出するが、余分な切断は島が増えるだけで無害
     (見逃しによる階段またぎ島だけが有害)。階ラベルは付けない
-    (昇降の積算は過検出で壊れるため、アンカー段で全フロア照合して決める)。
+    (昇降の積算は過検出で壊れるため、アンカーステップで全フロア照合して決める)。
     """
     tr_path = paths.imu / "transitions.json"
     if not tr_path.exists():
@@ -150,7 +150,7 @@ def build_manifest(paths, windows, max_seg=None, segments=None, prefix="pv",
     """max_seg指定時: それより長い訪問区間を等分割する (長島ドリフト対策。
     タグは pv0925_1Fa1, 1Fa2… のように数字接尾辞)。
     segments: [(floor|None, a, b)] を外部注入可 (imu_segments等)。
-    floor=None の区間はタグ pv<sess>_sNN (階はアンカー段で決める)"""
+    floor=None の区間はタグ pv<sess>_sNN (階はアンカーステップで決める)"""
     segs = segments if segments is not None else gt_segments(paths)
     by_floor = {}
     for fl, a, b in segs:
@@ -226,7 +226,7 @@ def run_batch(paths, max_seg=None, manifest_out=None,
     """前段一括: 区間計画 → チャンク推論(既存スキップ) → 区間別チェーン
 
     segments_source: "gt"=gt_trajectory.csv(開発・評価用) / "imu"=stairnet検出
-    (GTフリー、本番用。階ラベルなし→アンカー段で決定)
+    (GTフリー、本番用。階ラベルなし→アンカーステップで決定)
     model: "pv"=PanoVGGT のみ。
     チャンク置き場・タグ接頭辞・マニフェストをモデル別に分けるので共存できる。
 

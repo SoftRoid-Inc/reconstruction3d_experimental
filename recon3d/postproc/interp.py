@@ -10,8 +10,8 @@ MapAnythingポーズ条件付け (macond) はVRAM制約で間引きフレーム�
 出力はメートル実寸 (macondゲージ)。
 
 使い方 (ホスト recon3d env):
-  IMG_SESSION=0616 python -m recon3d.postproc.interp --pv pv0616_2F --ma macond0616_2F
-  IMG_SESSION=0912 python -m recon3d.postproc.interp --all   # pv_manifest.jsonの全島
+  python main.py tool interp --input /data/x --pv pv0616_2F --ma macond0616_2F
+  python main.py tool interp --input /data/x --all   # pv_manifest.jsonの全島
 出力: frontend_bench/maf<島名>/ (chain_chunks契約。点群はmacondのものを流用)
 """
 import argparse

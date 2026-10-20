@@ -9,8 +9,8 @@
 対照として健全区間 `--preset control` も同じ長さで用意してある。
 
 使い方:
-  IMG_SESSION=0925 python -m recon3d.eval.chunk_cmp --tags pv_c29 pi3_c29 holo_c29
-  python -m recon3d.eval.chunk_cmp --preset breakdown        # 窓の一覧を表示
+  python main.py tool chunk_cmp --input /data/x --tags pv_c29 pi3_c29 holo_c29
+  python main.py tool chunk_cmp --input /data/x --preset breakdown        # 窓の一覧を表示
 """
 import argparse
 import json

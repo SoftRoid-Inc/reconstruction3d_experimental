@@ -9,7 +9,7 @@
   - セッション合算 (全島の誤差をプール) の median / p90
   - カバレッジ = 島がカバーするGTフレームの割合
 
-使い方: IMG_SESSION=0616 python -m recon3d.eval.overview [--manifest pv_manifest.json]
+使い方: python main.py tool overview --input /data/x [--manifest pv_manifest.json]
 出力: frontend_bench/islands_overview.png / islands_overview.json
 """
 import argparse

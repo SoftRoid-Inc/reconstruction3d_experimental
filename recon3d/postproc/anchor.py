@@ -11,7 +11,7 @@
   3. 全フレームの図面px軌跡を組み立て (島区間=ICP解 / ギャップ=端点補間+IMU階割当)
   4. GT評価 (階段内外を分けて報告)
 
-使い方: python -m recon3d.postproc.anchor
+使い方: python main.py tool anchor --input /data/x
 出力: results/backend/{trajectory.json, trajectory_{1F,2F}.jpg, eval.json}
 """
 import json

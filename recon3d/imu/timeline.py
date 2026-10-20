@@ -10,7 +10,7 @@
 
 使い方:
   from recon3d.imu.timeline import frame_times, t_of_frame, frame_of_t
-  python -m recon3d.imu.timeline --report     # 等間隔仮定とのずれを表示
+  python main.py tool timeline --input /data/x --report     # 等間隔仮定とのずれを表示
 """
 import json
 

@@ -11,9 +11,9 @@ MapAnything (facebookresearch/map-anything, Apacheモデル) は全ビュー一�
 ポーズはクロップ回転 (yaw,pitch) の逆を掛けて元equirectリグ姿勢に直して保存する。
 
 使い方 (mapanythingコンテナ内):
-  IMG_SESSION=0616 python -m recon3d.postproc.mapany infer --tag mapany0616_1F --floor 1F
-  IMG_SESSION=0428 python -m recon3d.postproc.mapany infer --tag mapany0428_ALL --stride 2
-  IMG_SESSION=0616 python -m recon3d.postproc.mapany baseline --tag cmbase0616_1F --floor 1F
+  python main.py tool mapany --input /data/x infer --tag mapany0616_1F --floor 1F
+  python main.py tool mapany --input /data/x infer --tag mapany0428_ALL --stride 2
+  python main.py tool mapany --input /data/x baseline --tag cmbase0616_1F --floor 1F
 """
 import argparse
 import json

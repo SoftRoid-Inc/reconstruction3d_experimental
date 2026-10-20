@@ -7,7 +7,7 @@
 実証: 0912 2F 親のみ0.528m → サブ精錬後 2F1=0.457 / 2F2=0.281m。
 
 使い方:
-  IMG_SESSION=0912 python -m recon3d.postproc.hier_anchor \
+  python main.py tool hier_anchor --input /data/x \
       --parent pv0912_2F --floor 2F --subs pv0912_2F1 pv0912_2F2
 出力: backend/anchor_<sub>_hier.json (out.export互換) + hier_anchor_<sub>.json (frame→px)
 """

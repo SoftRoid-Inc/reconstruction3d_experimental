@@ -6,7 +6,7 @@
 3. チャンク単位補正: 島の精密化変換を初期値に、チャンクごとにICPを再実行して
    島内ドリフトを吸収 → フレーム単位軌跡を組み立ててGT評価
 
-使い方: python -m recon3d.postproc.plan_icp --island islandA --floor 1F
+使い方: python main.py tool plan_icp --input /data/x --island islandA --floor 1F
         (--chunks 0:5 --chunks-dir chunks を足すとチャンク単位補正+軌跡評価まで)
 """
 import argparse

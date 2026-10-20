@@ -11,7 +11,7 @@ corner_anchor は `backend/corner_anchor_<tag>.json`
 **最後に試した階**の結果で上書きされる。可視化前に正しい階で打ち直すこと。
 
 使い方:
-  IMG_SESSION=0912 python -m recon3d.eval.anchor_overlay
+  python main.py tool anchor_overlay --input /data/x
 出力: <物件>/results/<sess>/backend/anchor_overlay_<階>.png
 """
 import argparse

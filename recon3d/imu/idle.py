@@ -13,8 +13,8 @@
 依存はnumpyのみ (torch不要) なのでホストの recon3d env で動く。
 
 使い方:
-  IMG_SESSION=0828 python -m recon3d.imu.idle
-  IMG_SESSION=0828 python -m recon3d.imu.idle --min-duration-sec 1.0 --gyr 0.08
+  python main.py tool idle --input /data/x
+  python main.py tool idle --input /data/x --min-duration-sec 1.0 --gyr 0.08
 出力: results/<s>/imu/idle_spans.json
 """
 import json

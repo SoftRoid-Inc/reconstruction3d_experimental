@@ -13,8 +13,8 @@
 「ゲージと世界のヨー差」を取れば、島同士の相対回転が分かる。
 
 使い方 (imuコンテナ内。telemetry_parser が要る):
-  docker compose exec -e IMG_SESSION=0912 imu \\
-      python -m recon3d.imu.flowstate_yaw
+  docker compose exec imu \\
+      python main.py tool flowstate_yaw --input /data/x
 出力: results/<s>/imu/flowstate_yaw.npz (frames, yaw_deg)
 """
 import argparse

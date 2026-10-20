@@ -14,7 +14,7 @@
 末尾で約1フレームずれる (全セッションで実測)。
 
 telemetry_parserとimu_trajはimuコンテナにのみあるため、コンテナ内で実行する:
-  docker compose exec -e IMG_SESSION=0616 imu python -m recon3d.imu.transitions
+  docker compose exec imu python main.py tool transitions --input /data/x
 出力: results/<s>/imu/transitions.json
 """
 import json

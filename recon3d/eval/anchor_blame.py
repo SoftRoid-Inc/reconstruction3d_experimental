@@ -9,8 +9,8 @@
   正解のスコア < 採用のスコア → **スコアの問題**。差が出ている項が犯人
 
 使い方:
-  IMG_SESSION=0925 python -m recon3d.eval.anchor_blame
-  IMG_SESSION=0925 python -m recon3d.eval.anchor_blame --islands pv0925_s02
+  python main.py tool anchor_blame --input /data/x
+  python main.py tool anchor_blame --input /data/x --islands pv0925_s02
 """
 import argparse
 import json

@@ -12,7 +12,7 @@
   4. チャンク境界をまたぐ誤差ジャンプ (= その接続が持ち込んだ誤差)
 
 使い方:
-  IMG_SESSION=0912 python -m recon3d.eval.island_diag --tag pv0912_s02m
+  python main.py tool island_diag --input /data/x --tag pv0912_s02m
 出力: frontend_bench/diag_<tag>.png / diag_<tag>.json
 """
 import argparse

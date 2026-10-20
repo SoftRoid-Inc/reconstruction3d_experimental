@@ -14,7 +14,7 @@
 「オラクルの順位」。オラクル誤差が小さく順位が1でなければ (B)。
 
 使い方:
-  IMG_SESSION=0912 python -m recon3d.eval.anchor_oracle \
+  python main.py tool anchor_oracle --input /data/x \
       --manifest pv_full_manifest.json --mpu-source mapany
 """
 import argparse

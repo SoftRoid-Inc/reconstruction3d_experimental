@@ -12,7 +12,7 @@
                               <posetag> の軌跡・姿勢で配置する (深度のみ利用=案2)
 
 使い方 (ホスト recon3d env):
-  IMG_SESSION=0616 python -m recon3d.eval.depth --floor 2F \
+  python main.py tool depth --input /data/x --floor 2F \
       --tags pv0616_2F mapany0616_2F macond0616_2F --local mapany0616_2F:pv0616_2F
 """
 import argparse

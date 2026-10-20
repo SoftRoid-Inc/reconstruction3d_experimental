@@ -1,7 +1,7 @@
 """外部入力ディレクトリからパイプラインを回す (CLI=typer / 設定=hydra)
 
 S3から落とした 360°フレーム・人物マスク・IMU派生物・間取り図ラベルが
-1つのディレクトリに揃っている前提で、**設定で選んだ段だけ**を走らせる。
+1つのディレクトリに揃っている前提で、**設定で選んだステップだけ**を走らせる。
 
     reconstruction/
       images/   frame_number_000000.jpg ...     必須
@@ -48,7 +48,7 @@ def _cfg(overrides):
 
 @app.command()
 def run(overrides: List[str] = ARG):
-    """設定で選んだ段を走らせる (前提の段は自動で補う)
+    """設定で選んだステップを走らせる (前提のステップは自動で補う)
 
     **このプロセスで完結する**ので、ポッドの PID 1 としてそのまま `exec`
     できる (SIGTERM が中継なしで届く)。失敗は例外のまま落として非ゼロ終了する。
@@ -80,20 +80,20 @@ def inspect(overrides: List[str] = ARG):
     # 自分への引数だと思って usage で落ちる
     caps_main(paths, [])                  # 能力の内訳をそのまま出す
     typer.echo("")
-    typer.echo("実行できる段: " + (" -> ".join(order) or "(なし)"))
+    typer.echo("実行できるステップ: " + (" -> ".join(order) or "(なし)"))
     for k, v in skip.items():
         typer.echo(f"skip {k}: {v}")
 
 
 @app.command()
 def steps():
-    """段の一覧と依存関係 (入力に依らないので設定は要らない)"""
+    """ステップの一覧と依存関係 (入力に依らないので設定は要らない)"""
     from recon3d.steps import describe
     typer.echo("\n".join(describe()))
 
 
 # 図面→3Dモデル (plan2model)。撮影データは要らず floors/ だけで走るので、
-# パイプラインの段ではなく独立したサブコマンドにしてある
+# パイプラインのステップではなく独立したサブコマンドにしてある
 plan2model_app = typer.Typer(add_completion=False,
                              help="間取り図 → 壁・柱・開口・スラブの3Dモデル")
 app.add_typer(plan2model_app, name="plan2model")

@@ -4,7 +4,7 @@
   重力整列 → (鏡映2択 × 2D相似変換) をGT軌跡に全フレームでフィット → ATE。
 これは「前段の相対幾何がどれだけ正確か」を測る (後段の図面ICPの性能とは独立)。
 
-使い方: python -m recon3d.eval.frontend --tags panovggt da3base
+使い方: python main.py tool frontend --input /data/x --tags panovggt da3base
 出力: results/frontend_bench/compare.json / compare_<tag>.png (上面図)
 """
 import argparse

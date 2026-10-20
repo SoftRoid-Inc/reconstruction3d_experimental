@@ -9,7 +9,7 @@
 能力 (`core/caps.py`) が足りないステップは理由つきで skip する。明示的に
 指定されたステップが能力不足のときだけ、黙らずにエラーで止める。
 
-  IMG_SESSION=/data/reconstruction python -m recon3d.steps      # 一覧
+  python main.py steps      # 一覧 (name / 説明 / 依存 / 必要な能力)
 """
 import graphlib
 import json
@@ -22,7 +22,7 @@ class Ctx:
     """ステップ間で受け渡す状態
 
     `paths` が「どのデータセットか」を持つ唯一の場所。環境変数も
-    モジュール凍結も使わず、ここから各段へ引数で配る。
+    モジュール凍結も使わず、ここから各ステップへ引数で配る。
     """
     paths: object = None
     opt: dict = field(default_factory=dict)
@@ -30,7 +30,7 @@ class Ctx:
     chunks_dir: Optional[str] = None
     tag_suffix: str = ""
     caps: object = None
-    order: tuple = ()              # この実行で走る段 (前提の補完ずみ)
+    order: tuple = ()              # この実行で走るステップ (前提の補完ずみ)
     skipped: dict = field(default_factory=dict)   # step -> 理由
 
     def get(self, path, default=None):
@@ -58,8 +58,9 @@ def _prep(ctx):
     from recon3d.core.ingest import materialize_imu
     materialize_imu(ctx.paths)
     if ctx.paths.masks is None and not ctx.paths.seg.exists():
-        print("[prep] 人物マスクなし (person_mask_dir/seg未生成) — "
-              "マスク無しで続行。必要なら seg_ade20k を実行")
+        print(f"[prep] 人物マスクなし ({ctx.paths.root / 'masks'}) — "
+              "マスク無しで続行する。撮影者が写り込むと点群が汚れるので、"
+              "外部パイプラインが出したマスクを置くこと")
     # mapany はピンホールクロップを食うので、選ばれていれば自動で作る
     if ctx.get("chunking.crops") or "mapany" in ctx.order:
         from recon3d.core.crops import generate
@@ -82,7 +83,7 @@ def _chains(ctx):
     manifest_out = ctx.get("chunking.manifest_out") or f"{prefix}_manifest.json"
     ctx.opt.setdefault("chunking", {})["manifest_out"] = manifest_out
     segments = ctx.get("segments", "gt")
-    # 区間ソースは段ではなくオプションなので、能力検査はここで。
+    # 区間ソースはステップではなくオプションなので、能力検査はここで。
     # 黙って segments=gt へ落とさない (GTの無い物件で別セッションのGTを
     # 読んでしまう経路がある)。chunking.imu_segments は transitions.json が
     # 無いと detect() を呼び、その中がコンテナ専用パス決め打ちで
@@ -142,7 +143,7 @@ def _yaw_fix_rechain(ctx, common, var):
 
 
 def _posegraph(ctx):
-    """島ごとにポーズグラフ+ループ拘束で解き直し、以降の段の対象を差し替える
+    """島ごとにポーズグラフ+ループ拘束で解き直し、以降のステップの対象を差し替える
 
     逐次連結は誤差を一本道に積むが、全チャンクを同時に解くと解消する
     (34島の実測で形状残差 0.0059 -> 0.0046、−22%)。**逐次エッジだけの
@@ -172,7 +173,7 @@ def _posegraph(ctx):
     (ctx.paths.bench / name).write_text(_json.dumps(out, ensure_ascii=False,
                                               indent=1))
     ctx.manifest = out
-    # 以降の段 (bridge の islands_at 等も含む) が同じマニフェストを読むよう
+    # 以降のステップ (bridge の islands_at 等も含む) が同じマニフェストを読むよう
     # 差し替える。揃えないと「群れ化はPG、橋の両側判定は逐次」になる
     ctx.opt.setdefault("chunking", {})["manifest_out"] = name
     print(f"[posegraph] {len(out)}島 -> {ctx.paths.bench / name}")
@@ -293,9 +294,9 @@ STEPS = {s.name: s for s in (
 
 # `api.run(x)` を steps 省略で呼んだときの既定。**`conf/recon.yaml` の
 # `steps` と同じに保つこと** — CLI は yaml を、ライブラリ利用はこちらを
-# 見るので、ずれると「同じことをしたつもりが別の段が走る」。
+# 見るので、ずれると「同じことをしたつもりが別のステップが走る」。
 # `tests/check_imports.py` が一致を見張る。
-# eval は入れない: GT と図面実寸の両方が要る開発用の段で、本番入力では
+# eval は入れない: GT と図面実寸の両方が要る開発用のステップで、本番入力では
 # 必ず skip される
 DEFAULT_STEPS = ("prep", "chains", "anchor", "export")
 
@@ -375,7 +376,7 @@ def execute(paths, selected, opt=None):
 
 
 def describe():
-    """段の一覧 (name / doc / 依存 / 必要な能力) を行のリストで返す"""
+    """ステップの一覧 (name / doc / 依存 / 必要な能力) を行のリストで返す"""
     w = max(len(s) for s in STEPS)
     out = []
     for s in STEPS.values():

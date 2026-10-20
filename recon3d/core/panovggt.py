@@ -4,7 +4,7 @@ PanoVGGT の inference.py (無改変) を**同一プロセスで**呼ぶ。撮�
 人物マスクで除外する (PanoVGGTのマスク仕様: 黒=無効)。
 
 かつては専用 conda env の subprocess だったが、単一 Docker イメージ化で
-不要になった (2026-10-19)。推論段は `recon3d` イメージの中でだけ動く。
+不要になった (2026-10-19)。推論ステップは `recon3d` イメージの中でだけ動く。
 
 出力: results/pcd/points.ply (統合点群) / cameras.npz (姿勢+フレームID)
 """
@@ -30,14 +30,14 @@ def _panovggt_paths():
     """(PanoVGGTディレクトリ, 重み) を返す。使えなければ SystemExit
 
     **`PANOVGGT_DIR` を持つのはイメージだけ** (Dockerfile が設定する)。
-    未設定なら推論段で止める — 開発ホストの python には torch 2.9.1 が
+    未設定なら推論ステップで止める — 開発ホストの python には torch 2.9.1 が
     入っていて `import inference` が**通ってしまう**が、PanoVGGT が想定
     するのは 2.5 系。「動くが結果が違う」が一番まずいので入口で止める。
     """
     d = os.environ.get("PANOVGGT_DIR")
     if not d:
         raise SystemExit(
-            "PANOVGGT_DIR が未設定: 推論段は recon3d イメージ内で"
+            "PANOVGGT_DIR が未設定: 推論ステップは recon3d イメージ内で"
             "実行してください\n"
             "  docker compose exec recon3d python main.py run input=...\n"
             "(既存チャンクを使う段 — posegraph / anchor / export / 評価 — は"

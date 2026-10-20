@@ -6,7 +6,7 @@
 |---|---|
 | とにかく動かしたい | [1. まず動かす](#1-まず動かす) |
 | 何がどう繋がっているか | [2. 全体像](#2-全体像) |
-| 各段が何をするか | [3. 段リファレンス](#3-段リファレンス) |
+| 各ステップが何をするか | [3. ステップリファレンス](#3-ステップリファレンス) |
 | やりたいことの手順 | [4. レシピ](#4-レシピ) |
 | 設定キーの意味 | [5. 設定パラメータ](#5-設定パラメータ) |
 | Docker / k8s で回す | [6. 実行環境](#6-実行環境) |
@@ -92,25 +92,25 @@ frames  757枚  (0..756)
   [ ] scale         図面の実寸 (floors/meta.json の known_width_mm)
         -> 図面の実寸が未設定。floors/meta.json に {"known_width_mm": 13877.5} を書く
   ...
-実行できる段: prep -> chains
+実行できるステップ: prep -> chains
 skip anchor: 図面の実寸が未設定 ...
 ```
 
 `core/caps.py` が入力を見て能力を判定し、`steps.py` が振り分ける。
 
-- **明示的に選んだ段**が能力不足 → **エラーで止める**
-- **前提として自動で補われた段**が能力不足 → 理由を出して skip
+- **明示的に選んだステップ**が能力不足 → **エラーで止める**
+- **前提として自動で補われたステップ**が能力不足 → 理由を出して skip
 
 | 能力 | 条件 | 欠けたとき |
 |---|---|---|
-| `frames` | `images/frame_number_*.jpg` | 全段が不可 |
+| `frames` | `images/frame_number_*.jpg` | 全ステップが不可 |
 | `masks` | `masks/` に実ファイル | 警告のみ (マスク無しで続行) |
 | `imu_segments` | `imu/transitions.json` | `segments=imu` が不可 |
 | `imu_idle` | `imu/idle_spans.json` | 静止での島切断をしない |
 | `floors` | `floors/*.json` に `label=wall` | アンカー不可 |
 | `scale` | `known_width_mm` or `mm_per_px` | アンカー不可・評価不可 |
 | `scale_prior` | `backend/scale_bias.json` または `macond*` | **止めない**。`slab` 事前 (誤差97〜383%) に落ちて当たりにくくなる |
-| `gt` | `trajectory_points.csv` | 評価段を skip |
+| `gt` | `trajectory_points.csv` | 評価ステップを skip |
 | `floor_assign` | `backend/floor_assign.json` | 階未割当の島はアンカーを skip |
 
 > **黙って縮退しないのが設計方針。** かつて `IMG_SESSION` 未設定が既定
@@ -173,7 +173,7 @@ flowchart TD
 ```
 
 **図面アンカーが食うのは3つ** — 密度地図・間取り図・`m_per_unit`。
-3つ目を見落としやすい ([段 anchor](#anchor--図面アンカー-本命) 参照)。
+3つ目を見落としやすい ([ステップ anchor](#anchor--図面アンカー-本命) 参照)。
 
 ### 用語
 
@@ -188,10 +188,10 @@ flowchart TD
 
 ---
 
-## 3. 段リファレンス
+## 3. ステップリファレンス
 
-段は `recon3d/steps.py` の登録表で定義する。各段が `needs` を宣言し、
-`graphlib` が順序を決める。**選んだ段の前提は自動で補われる**
+ステップは `recon3d/steps.py` の登録表で定義する。各ステップが `needs` を宣言し、
+`graphlib` が順序を決める。**選んだステップの前提は自動で補われる**
 (`steps=[anchor]` → `prep → chains → anchor`)。
 
 ```mermaid
@@ -264,7 +264,7 @@ flowchart LR
 
 逐次連結は誤差を一本道に積む。全チャンクを5自由度 (log scale / ヨー / 並進)
 で同時に解き、再訪ループ拘束を足す。出力は `frontend_bench/pg_<島タグ>/` で、
-**以降の段はこちらを対象にする** (`pg_manifest.json` に差し替わる)。
+**以降のステップはこちらを対象にする** (`pg_manifest.json` に差し替わる)。
 
 > **逐次エッジだけのポーズグラフは逐次連結と同じ解になる。** 木構造で
 > 冗長性がゼロだから。採用ループ0本の島は `rms` がちょうど 0 になり、
@@ -350,7 +350,7 @@ pv チェーンの局所形状から全フレームを補間する (`maf*`)。
 
 ### 図面が無いとき (軌跡と点群だけ作る)
 
-壁注釈や実寸が無くても**軌跡生成とポーズグラフは動く**。段を絞って回す。
+壁注釈や実寸が無くても**軌跡生成とポーズグラフは動く**。ステップを絞って回す。
 
 ```bash
 python main.py inspect input=/data/reconstruction
@@ -412,7 +412,7 @@ MAD が小さければ「物件全体の系統バイアス」、大きければ�
 
 ### 個別モジュールを叩く (`tool`)
 
-段より細かい単位で回したいとき。各モジュールの argparse をそのまま使い、
+ステップより細かい単位で回したいとき。各モジュールの argparse をそのまま使い、
 `-h` はツール側のヘルプへ通る。49本ある。
 
 ```bash
@@ -459,10 +459,10 @@ python main.py plan2model verify input=/data/x     # 2D再投影IoU
 | キー | 既定 | 説明 |
 |---|---|---|
 | `input` | なし(必須) | 入力ディレクトリ。`images/ masks/ imu/ floors/` が並ぶ親 |
-| `steps` | `[prep, chains, anchor, export]` | 走らせる段。**前提は自動で補われる**ので終点だけ書けばよい (`[anchor]` → prep,chains,anchor) |
+| `steps` | `[prep, chains, anchor, export]` | 走らせるステップ。**前提は自動で補われる**ので終点だけ書けばよい (`[anchor]` → prep,chains,anchor) |
 | `segments` | `imu` | 島の切り方。`imu`=階段検出+静止検出 (**本番**、GT不要) / `gt`=GT軌跡の階ラベル |
 
-> `segments` は段ではなくオプションなので、能力検査は `chains` の中で行う。
+> `segments` はステップではなくオプションなので、能力検査は `chains` の中で行う。
 > `imu` を指定して `imu/transitions.json` が無ければ**止まる** — 黙って `gt` へ
 > 落とすと、GTの無い物件で別物件のGTを読む経路に入る。
 
@@ -558,11 +558,11 @@ docker compose exec -w /opt/recon3d recon3d python main.py run input=...
 | 重み | **焼かない** (3.9GB)。`PANOVGGT_CKPT` で指す。ローカルは `/home/maren/models`、k8s は PVC / initContainer |
 | 入れていないもの | `mesh/*` (open3d) / pi3・holo (別コンテナ) |
 
-> **`PANOVGGT_DIR` が未設定なら推論段で止まる。** 開発ホストの python には
+> **`PANOVGGT_DIR` が未設定なら推論ステップで止まる。** 開発ホストの python には
 > 別バージョンの torch が入っていて `import inference` が**通ってしまう**が、
 > PanoVGGT が想定するのは 2.5 系。「動くが結果が違う」を防ぐため、
 > イメージだけがこの変数を持つようにしてある。
-> 既存チャンクを使う段 (posegraph / anchor / export / 評価) は GPU も
+> 既存チャンクを使うステップ (posegraph / anchor / export / 評価) は GPU も
 > PanoVGGT も要らないので、ホストのままで動く。
 
 > **`reconstruction_3d` は 188GB** (28-BBBBB だけで155GB)。
@@ -623,14 +623,14 @@ cgroup v2 `cpu.max` → cgroup v1 `cpu.cfs_quota_us` → `sched_getaffinity` →
 
 ### データセットを指すのは `input=` だけ
 
-環境変数は**使わない**。所在は `paths.Paths` に入り、各段へ**引数で**配られる。
+環境変数は**使わない**。所在は `paths.Paths` に入り、各ステップへ**引数で**配られる。
 
 | 要素 | 出所 |
 |---|---|
 | データセット名 (タグ接頭辞) | 入力ディレクトリ名 |
 | 入出力の場所 | `Paths` (入力1ディレクトリから導出) |
 | 図面の実寸 | `floors/meta.json` の `known_width_mm` |
-| 段の選択・パラメータ | hydra (`conf/recon.yaml` + `key=value`) |
+| ステップの選択・パラメータ | hydra (`conf/recon.yaml` + `key=value`) |
 
 > `tests/check_imports.py` が「**`paths` に既定値を置かないこと**」を静的に
 > 見張っている。既定値を1つ置いた瞬間、渡し忘れが 2026-10-09 の
@@ -642,7 +642,7 @@ cgroup v2 `cpu.max` → cgroup v1 `cpu.cfs_quota_us` → `sched_getaffinity` →
 
 ```
 recon3d/
-  steps.py           **段の登録表と依存解決** (順序はここが決める)
+  steps.py           **ステップの登録表と依存解決** (順序はここが決める)
   api.py             外部から呼ぶ入口 (run / plan)。プロセス内で実行する
   paths.py           データセットの所在 (Paths)。入力1ディレクトリから導く
   constants.py       入力に依らない定数だけ
@@ -661,7 +661,7 @@ recon3d/
     floor_assign.py    階の手動割当 (ranges形式)
     plan_grid.py       図面のグリッド表現
   postproc/          後段: 島→図面座標
-    anchor_run.py      全島をプロセス並列でアンカーする (段の実体)
+    anchor_run.py      全島をプロセス並列でアンカーする (ステップの実体)
     anchor.py          prepare_island (密度地図づくり) / anchor_island
     corners.py         コーナーRANSAC + 壁ICP (アンカーの本体)
     anchor_score.py    候補の採点 (f1 × cam_feas^2 × スケール罰)
@@ -766,7 +766,7 @@ GPU や別コンテナにしか無い依存 (torch / shapely / open3d …) の
 |---|---|
 | **SIGTERM は PID 1 にしか来ない** | 放置すると GPU推論の subprocess と fork ワーカーが孤児化して走り続ける (実測)。入口で `core/signals.forward_to_process_group()` を呼ぶ |
 | **`os.cpu_count()` はノードのコア数** | ポッドの CPU limit を見ないので過剰並列 → OOMKilled。`core/caps.cpus()` を使う |
-| **`os.chdir` は同一プロセスに残る** | PanoVGGT は相対パスで重みを引くので chdir が要る。subprocess 時代は無害だったが、戻さないと後続の段が相対パスを見失う (`panovggt_batch._in_panovggt` が try/finally で戻す) |
+| **`os.chdir` は同一プロセスに残る** | PanoVGGT は相対パスで重みを引くので chdir が要る。subprocess 時代は無害だったが、戻さないと後続のステップが相対パスを見失う (`panovggt_batch._in_panovggt` が try/finally で戻す) |
 | **ビューアはZ上向き** | `viewer_template.html` は `up=(0,0,1)`。整列系は y+ が物理下向きなので `(x, z, -y)` で渡す |
 
 ### 評価

@@ -5,7 +5,7 @@ COLMAP公式のpanorama_sfm推奨と同じく、equirectから透視ビューを
 フレーム番号との対応表 (name_map.json) を保存し、COLMAPモデル読み取り時に
 frame番号へ引き戻せるようにする。
 
-使い方: IMG_SESSION=0312 conda run -n recon3d python -m recon3d.core.crops \
+使い方: python main.py tool crops --input /data/x \
           [--fov 120] [--yaw 0] [--size 1100]
 出力: results/vidmap/<sess>/frames/ (連番jpg) + name_map.json
 """

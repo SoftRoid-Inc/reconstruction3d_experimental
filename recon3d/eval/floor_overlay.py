@@ -15,8 +15,8 @@ GT点はフレーム間速度で色分けし、屋内歩行の上限1.5 m/sを�
       --manifest-out <model>_gtseg_manifest.json
 
 使い方:
-  IMG_SESSION=0912 python -m recon3d.eval.floor_overlay
-  IMG_SESSION=0912 python -m recon3d.eval.floor_overlay --models pv holo
+  python main.py tool floor_overlay --input /data/x
+  python main.py tool floor_overlay --input /data/x --models pv holo
 出力: <物件>/results/<sess>/frontend_bench/floor_overlay_<階>.png
 """
 import argparse

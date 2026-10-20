@@ -186,7 +186,7 @@ def detect(paths):
         c.have.add("floor_assign")
     else:
         c.why["floor_assign"] = (
-            "島→階の割当が無い。`python -m recon3d.core.floor_assign "
+            "島→階の割当が無い。`python main.py tool floor_assign --input /data/x "
             "--template` で雛形を作って backend/floor_assign.json を編集")
     return c
 

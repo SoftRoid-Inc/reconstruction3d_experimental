@@ -12,8 +12,8 @@
      **どの壁と対応が取れていないか**が直接見える
 
 使い方:
-  IMG_SESSION=0925 python -m recon3d.eval.error_view
-  IMG_SESSION=0925 python -m recon3d.eval.error_view --err-m 1.0
+  python main.py tool error_view --input /data/x
+  python main.py tool error_view --input /data/x --err-m 1.0
 出力: backend/error_view_<階>.png / error_density_<島>.png
 """
 import argparse

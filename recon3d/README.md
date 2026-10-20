@@ -24,19 +24,19 @@ python main.py inspect input=/data/reconstruction          # 点検
 python main.py run     input=/data/reconstruction
 python main.py run     input=/data/reconstruction \
     'steps=[anchor,export]' chunking.chunk_size=24
-python main.py steps                                       # 段の一覧
+python main.py steps                                       # ステップの一覧
 ```
 
-**段の順序は書いた順ではなく依存で決まる** (`steps.py`)。選んだ段の前提は
-自動で補われ、能力が足りない段は理由つきで skip される
-(明示的に選んだ段が能力不足のときだけエラーで止まる)。
+**ステップの順序は書いた順ではなく依存で決まる** (`steps.py`)。選んだステップの前提は
+自動で補われ、能力が足りないステップは理由つきで skip される
+(明示的に選んだステップが能力不足のときだけエラーで止まる)。
 
 > `floors/meta.json` の `known_width_mm` (最外壁芯間のx方向スパン[mm]) が
 > 無いと図面アンカーは動かない。**壁注釈だけでは px→m が決まらない。**
 
 ## 個別モジュールを叩く (開発・調査)
 
-段より細かい単位で回したいときは `tool`。各モジュールの argparse を
+ステップより細かい単位で回したいときは `tool`。各モジュールの argparse を
 そのまま使う (`-h` はツール側のヘルプに通る)。
 
 ```bash
@@ -70,24 +70,24 @@ docker compose exec recon3d python main.py run input=/data/reconstruction
 > いるので**マウントした編集中のコード**が動く。イメージに焼いた
 > `/opt/recon3d` は k8s 用 (ENTRYPOINT がそちらを使う)。
 
-> **GPU段 (`chains`) はイメージの中でだけ動く。** `PANOVGGT_DIR` が未設定だと
-> 推論段で止まる — ホストの python には torch 2.9.1 が入っていて
+> **GPUステップ (`chains`) はイメージの中でだけ動く。** `PANOVGGT_DIR` が未設定だと
+> 推論ステップで止まる — ホストの python には torch 2.9.1 が入っていて
 > `import inference` が通ってしまうが、PanoVGGT が想定するのは 2.5 系で、
-> 「動くが結果が違う」を防ぐため。既存チャンクを使う段 (posegraph / anchor /
+> 「動くが結果が違う」を防ぐため。既存チャンクを使うステップ (posegraph / anchor /
 > export / 評価) は GPU も PanoVGGT も要らないのでホストのままで動く。
 
 `mapany` 後処理と `pi3`/`holo` は別コンテナ。`mesh/*` (open3d) と `gs/*`
 (gsplat) はこのイメージに入れていない。
 
 **データセットを指すのは `input=` だけ**。所在は `paths.py` の `Paths` に
-入り、各段へ**引数で配られる** — 環境変数もモジュール凍結も無い。
+入り、各ステップへ**引数で配られる** — 環境変数もモジュール凍結も無い。
 タグ接頭辞や出力先は入力ディレクトリ名から決まる。
 
 ---
 
 > **全体像と動かし方は [`PIPELINE.md`](PIPELINE.md) にまとめた**
 > (図つき。構造・実行コマンド・大量実走の設計・落とし穴)。
-> ここは各段の詳細とモジュール対応表。
+> ここは各ステップの詳細とモジュール対応表。
 
 ## メインの仕組み
 
@@ -95,8 +95,8 @@ docker compose exec recon3d python main.py run input=/data/reconstruction
 [prep] → [chains] → [eval]   ＋ 任意後処理 (mapany/bridge/anchor/hier/export)
 ```
 
-段の定義と依存は `steps.py` の登録表。`core/caps.py` が入力の能力を判定し、
-できない段を理由つきで skip する。
+ステップの定義と依存は `steps.py` の登録表。`core/caps.py` が入力の能力を判定し、
+できないステップを理由つきで skip する。
 
 ### 1. prep — 入力準備(`core/ingest` + `core/crops`)
 
@@ -117,7 +117,7 @@ docker compose exec recon3d python main.py run input=/data/reconstruction
   - `imu`(本番用・GTフリー): IMU階段検出(`imu/transitions`、学習済みstairnet CNN。
     `transitions.json`が無ければ自動生成)。検出イベントを切断点として区間を切る。
     過検出(はしご・脚立)は島が増えるだけで無害。階ラベルは付けず
-    (タグは`pv<sess>_sNN`)、階はアンカー段で決める設計。
+    (タグは`pv<sess>_sNN`)、階はアンカーステップで決める設計。
     チェーン後に**幾何検算**(`core/stair_check`: 重力整列カメラ軌跡の鉛直変位
     >1.5×カメラ高)が走り、IMU見逃しの階段またぎ島とチェーン破綻島を
     自動再分割する(`stair_resplit`、タグ接尾辞r1/r2)
@@ -149,7 +149,7 @@ docker compose exec recon3d python main.py run input=/data/reconstruction
 
 ### 4. eval — GT軌跡との比較(`eval/frontend`)
 
-能力 `gt` と `scale` の両方が要る。片方でも欠ければこの段は skip される。
+能力 `gt` と `scale` の両方が要る。片方でも欠ければこのステップは skip される。
 
 - **入力**: 島タグの `global_cameras.npz`、GT軌跡
   (`<物件>/trajectory_points.csv`。未配備の物件のみ手動登録
@@ -195,7 +195,7 @@ docker compose exec recon3d python main.py run input=/data/reconstruction
 
 ### 座標・規約の要点(事故防止)
 - **PanoVGGTのworld Y軸は物理的に「下」**(equirect画像座標由来)。水平処理は
-  この規約のまま検証済みなので維持し、鉛直は出力段で `floor_phys_y_units`
+  この規約のまま検証済みなので維持し、鉛直は出力ステップで `floor_phys_y_units`
   (物理床=カメラよりy大側の最大質量ピーク)基準に反転解釈する
 - 島座標は非メートル(チャンク0ゲージ)。メートル化はアンカー(図面)または
   MapAnything出力(メトリック)から
@@ -210,7 +210,7 @@ docker compose exec recon3d python main.py run input=/data/reconstruction
 |---|---|
 | `paths.py` | **データセットの所在** (`Paths`)。入力1ディレクトリから in/out を導く凍結 dataclass。引数で引き回す — モジュール変数に固めない |
 | `constants.py` | 入力に依らない定数だけ (代表フレーム数・ラベル定義など) |
-| `steps.py` | **段の登録表と依存解決** (`needs`/`before`/`caps` + graphlib)。順序はここが決める |
+| `steps.py` | **ステップの登録表と依存解決** (`needs`/`before`/`caps` + graphlib)。順序はここが決める |
 | `main.py` (直下) | **ポッドの ENTRYPOINT**。`tools/recon` の薄いラッパ |
 | `api.py` | Python から呼ぶ入口 (`run` / `plan`)。**このプロセスで実行する** — 1ポッド1データセットならプロセス分離は要らない |
 | `conf/` | hydra設定 (`recon.yaml` = 入力ディレクトリ実行) |
@@ -246,7 +246,7 @@ docker compose exec recon3d python main.py run input=/data/reconstruction
 
 | 旧 | 新 |
 |---|---|
-| `pipeline.stage_chunks_chains` ほか段の本体 | `steps.py` の登録表 (`_prep`/`_chains`/…) |
+| `pipeline.stage_chunks_chains` ほかステップの本体 | `steps.py` の登録表 (`_prep`/`_chains`/…) |
 | `pipeline.post_anchor` / `_anchor_one` | `postproc.anchor_run.anchor_islands` |
 | `pipeline.post_mapany` | `postproc.mapany_run.run_mapany` |
 | `--post` を書いた順に実行 | `steps.resolve` が依存で順序を決める |
@@ -264,7 +264,7 @@ docker compose exec recon3d python main.py run input=/data/reconstruction
 - 本番(GTなし)の島計画は `--segments imu`。stairnetの`offset_sec`は**0**を使う
   (imu_traj既定の−5sは本データでは10〜15フレーム早ずれ)。既知の限界:
   短い2F→3F階段(数秒)を見逃すことがある(0616/0925で実測)→ max-seg分割と
-  アンカー段の階選択が保険
+  アンカーステップの階選択が保険
 - MapAnything条件付けの価値はメトリックスケールと点群品質(軌跡改善は小幅)
 - 屋外・基礎段階(0428型)はPanoVGGT不成立 → COLMAP系(`colmap_prior`)
 - 後期工程(0925型)は密度コーナーが汚れ自動アンカー未解決 → COLMAPプライア併用が次の一手

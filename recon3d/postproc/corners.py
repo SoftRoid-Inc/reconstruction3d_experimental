@@ -10,7 +10,7 @@
 各コーナーは象限シグネチャ (交点から壁が伸びる向き dx,dy ∈ {+1,-1,0}) を持ち、
 照合時の対応候補フィルタに使う (L字は一意な向きを持つ)。
 
-使い方: python -m recon3d.postproc.corners            # 図面+島の検出と検証画像
+使い方: python main.py tool corners --input /data/x            # 図面+島の検出と検証画像
 出力: results/backend/corners_plan_{1F,2F}.jpg / corners_island_<tag>.jpg
 """
 import json

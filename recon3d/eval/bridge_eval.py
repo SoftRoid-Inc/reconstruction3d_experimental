@@ -18,8 +18,8 @@
   側別も全体も小さい       → 成功。島間の相対Sim(3)として採用できる
 
 使い方:
-  IMG_SESSION=0912 python -m recon3d.eval.bridge_eval
-  IMG_SESSION=0912 python -m recon3d.eval.bridge_eval --modes span both
+  python main.py tool bridge_eval --input /data/x
+  python main.py tool bridge_eval --input /data/x --modes span both
 """
 import argparse
 

@@ -19,7 +19,7 @@
 いずれも corner_anchor が既に計算しているので**追加コストはゼロ**。
 
 使い方 (GTがある開発環境で閾値を決める):
-  IMG_SESSION=0912 python -m recon3d.eval.anchor_confidence
+  python main.py tool anchor_confidence --input /data/x
 出力: backend/anchor_confidence.json (指標とGT残差の対応)
 """
 import argparse

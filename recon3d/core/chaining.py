@@ -5,8 +5,8 @@ PanoVGGT形式 (panovggt_out/pointclouds/per_frame/*.ply) と
 DA3形式 (per_frame.npz) の両方のチャンクレイアウトに対応する。
 
 使い方:
-  python -m recon3d.core.chaining --chunks-root results/pcd/chunks_masked --tag panovggt
-  python -m recon3d.core.chaining --chunks-root results/da3/chunks_da3base --tag da3base
+  python main.py tool chaining --input /data/x --chunks-root results/pcd/chunks_masked --tag panovggt
+  python main.py tool chaining --input /data/x --chunks-root results/da3/chunks_da3base --tag da3base
 
 出力: results/frontend_bench/<tag>/ {global_cameras.npz, global_points.ply, chain_log.json}
 """

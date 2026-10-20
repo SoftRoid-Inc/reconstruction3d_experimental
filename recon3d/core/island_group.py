@@ -20,8 +20,8 @@
 またぎも試して一致度に任せる**。`--skip-cross-floor` で37%の推論を節約できる。
 
 使い方:
-  IMG_SESSION=0925 python -m recon3d.core.island_group            # 群れを書く
-  IMG_SESSION=0925 python -m recon3d.core.island_group --dry-run  # 判定だけ
+  python main.py tool island_group --input /data/x            # 群れを書く
+  python main.py tool island_group --input /data/x --dry-run  # 判定だけ
 """
 import argparse
 import json

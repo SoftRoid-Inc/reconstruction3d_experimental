@@ -16,7 +16,7 @@
 繋いだときのスケール比の対数絶対値)。
 
 使い方:
-  IMG_SESSION=0912 python -m recon3d.eval.scale_probe
+  python main.py tool scale_probe --input /data/x
 出力: frontend_bench/scale_probe.json (チャンク毎の特徴と相関)
 """
 import argparse
