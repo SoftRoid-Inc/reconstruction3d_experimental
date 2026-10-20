@@ -114,8 +114,9 @@ recon3d(軌跡生成・3D再構築・図面合わせ)を、`/home/maren/git/pipe
    `(密度地図, PlanGrid, スケール事前) -> (変換, 指標)` の純関数と、
    端の I/O に割る。
 2. **submodule にして薄いラッパで包む。**
-   `submodules/recon3d` → `COPY ... /pymodules/recon3d` →
-   `pipes/recon_3d/src/steps/<名>.py` が純関数を呼ぶ薄いラッパ →
+   `submodules/reconstruction3d_experimental` →
+   `COPY ... /pymodules/reconstruction3d_experimental` →
+   `pipes/recon_experimental/src/steps/<名>.py` が純関数を呼ぶ薄いラッパ →
    `entry/` が `step()` で直列に並べる。
 3. **比較して、勝った方式を `pipes/recon_ff/src/steps/` へ持っていく。**
 
@@ -161,11 +162,14 @@ recon3d(軌跡生成・3D再構築・図面合わせ)を、`/home/maren/git/pipe
 recon_ff 側の位置が別コードで出た数字では直接比べられない。
 どう揃えるかは未決(下記 D)。
 
-### 6. `ReconEngineEnum.RECON3D` として `reconstruction` asset に足す。前段は自前
+### 6. `ReconEngineEnum.EXPERIMENTAL` として `reconstruction` asset に足す。前段は自前
 
 依頼者の決定。recon_ff の中間成果物を食う後段パイプにはしない。
-`ReconEngineEnum` に `RECON3D` を足して `reconstruction` asset の engine 分岐に
-乗せるので、`run_recon.py --engine recon3d` がそのまま投入手段になる。
+`ReconEngineEnum` に `EXPERIMENTAL` を足して `reconstruction` asset の engine
+分岐に乗せるので、`run_recon.py --engine experimental` がそのまま投入手段になる。
+
+**pipeline 側のパイプ名は `pipes/recon_experimental/`**(依頼者の指示)。
+image 定数は家の規約どおり `RECON_EXPERIMENTAL_IMAGE`。
 
 代償として、チャンクは recon_ff と別に持つことになる(recon_ff 側は
 224MB〜4.5GB/件 × 245件が既に S3。recon3d は窓16/stride12 の別形式)。
@@ -271,19 +275,23 @@ recon3d は両方要る**。手で注釈した少数で recon3d が勝っても�
 決めないと、(a) 何件に注釈を発注するか(B)が決まらず、(b)「芯を剥がす」投資の
 是非も判断できない。
 
-### E. `reconstruction3d_experimental` の公開先
+### E. 公開先は決定済み(push はまだ)
 
-**git remote が無い。** submodule には URL が要り、pipeline の CI
-(`scripts/ci/images.py` が Dockerfile の COPY 行から submodule を init する)が
-fetch できる必要がある。公開先の org・可視性・権限が未定。
-あわせて、研究用の pipe を本番リポジトリの常設 image 群に置くことを
-pipeline 側のオーナーが許すかも確認が要る。
+`https://github.com/SoftRoid-Inc/reconstruction3d_experimental`
+(依頼者の指示。`origin` として登録済み)。
+
+**まだ push していない。** 現在のブランチは `img-align-anchor-scoring` で
+59コミット。初回 push の前に、どのブランチを既定にするか(`main` を切るか、
+このブランチのまま出すか)と、リポジトリの可視性を確認すること。
+
+残る確認: 研究用の pipe を本番リポジトリの常設 image 群に置くことを
+pipeline 側のオーナーが許すか。
 
 ## builder に委ねること
 
 - 芯を剥がす具体(どの関数から、どう割るか)。`postproc/corners.corner_anchor`
   と `postproc/anchor.prepare_island` が起点になるはず。
-- `pipes/recon_3d/` の step 分割と S3 レイアウト。
+- `pipes/recon_experimental/` の step 分割と S3 レイアウト。
 - `engine_recon3d.py` が読む成果物の形。
 - 既存の回帰(0912 の5島アンカー12 JSON のバイト一致、chains の決定性)を
   剥がす作業の金床として使うこと。
