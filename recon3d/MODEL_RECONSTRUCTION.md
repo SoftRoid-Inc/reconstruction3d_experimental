@@ -55,5 +55,5 @@ GTデータを入力として後段の開発を先に進める。
 
 ## 注意事項
 - 元図面・GT・リポジトリ(third_party/CubiCasa5k)は無改変を維持する
-- 検討の成果物は reconstruction_3d 配下の専用フォルダに置く(例: `recon3d/`)
-- Docker環境の落とし穴は `reconstruction_3d/CLAUDE.md` 参照
+- 検討の成果物は reconstruction3d_experimental 配下の専用フォルダに置く(例: `recon3d/`)
+- Docker環境の落とし穴は `reconstruction3d_experimental/CLAUDE.md` 参照

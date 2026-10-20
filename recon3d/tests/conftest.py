@@ -14,7 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]      # reconstruction_3d/
+ROOT = Path(__file__).resolve().parents[2]      # reconstruction3d_experimental/
 
 
 def run_py(code, timeout=300, **env_extra):

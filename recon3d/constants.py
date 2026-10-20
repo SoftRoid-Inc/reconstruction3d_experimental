@@ -5,7 +5,7 @@
 """
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent   # reconstruction_3d/
+PROJECT_ROOT = Path(__file__).resolve().parent.parent   # reconstruction3d_experimental/
 PKG_DIR = PROJECT_ROOT / "recon3d"
 # 全データセット横断のSOTAログ (git管理)。出力とは別に据え置く
 REPORT_PATH = PKG_DIR / "results" / "REPORT.md"

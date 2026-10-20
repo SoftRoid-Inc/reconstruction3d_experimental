@@ -7,10 +7,10 @@
 - 柱断面を壁帯に一致させ壁からのはみ出しを解消
 
 実行例 (コンテナ内):
-    python /code2/reconstruction_3d/cubicasa/align_gt.py \
-        /code2/reconstruction_3d/28-AAAAA/zumen/1F.json \
-        /code2/reconstruction_3d/28-AAAAA/zumen/2F.json \
-        --out-dir /code2/reconstruction_3d/28-AAAAA/gt_aligned
+    python /code2/reconstruction3d_experimental/cubicasa/align_gt.py \
+        /code2/reconstruction3d_experimental/28-AAAAA/zumen/1F.json \
+        /code2/reconstruction3d_experimental/28-AAAAA/zumen/2F.json \
+        --out-dir /code2/reconstruction3d_experimental/28-AAAAA/gt_aligned
 
 出力: <out-dir>/<stem>.json (labelme形式, 元は無改変) と <stem>_after.png (確認用)
 """

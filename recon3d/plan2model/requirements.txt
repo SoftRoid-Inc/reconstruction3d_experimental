@@ -1,4 +1,4 @@
-# recon3d イメージに入っている (reconstruction_3d/Dockerfile)。
+# recon3d イメージに入っている (reconstruction3d_experimental/Dockerfile)。
 # 別のコンテナで動かすときの参照用。既存ピン
 # (numpy1.24.4/scipy1.9.3/shapely1.8.5/matplotlib<3.9) を壊さないこと
 trimesh

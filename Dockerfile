@@ -56,7 +56,7 @@ COPY main.py /opt/recon3d/main.py
 # **焼いたコードが動く。** `python main.py` は sys.path[0] にスクリプトの
 # ディレクトリを置くので、PYTHONPATH の順で上書きすることはできない。
 # ローカルで編集中のコードを使いたいときは、マウントした側で動かす:
-#   docker compose exec -w /code2/reconstruction_3d recon3d python main.py ...
+#   docker compose exec -w /code2/reconstruction3d_experimental recon3d python main.py ...
 # (compose の recon3d サービスは working_dir と PYTHONPATH をそう設定ずみ)
 ENV PYTHONPATH=/opt/recon3d:/opt/panovggt
 ENV PANOVGGT_DIR=/opt/panovggt

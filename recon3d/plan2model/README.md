@@ -27,15 +27,15 @@ cd /home/maren/programming
 
 # 2D再投影検証 (IoU + オーバーレイPNG) — まずこれで図面の読みを確かめる
 docker compose exec -T recon3d python main.py plan2model verify \
-  input=/code2/reconstruction_3d/28-AAAAA/recon_11177
+  input=/code2/reconstruction3d_experimental/28-AAAAA/recon_11177
 
 # モデル生成 (glb / obj / report.json)
 docker compose exec -T recon3d python main.py plan2model build \
-  input=/code2/reconstruction_3d/28-AAAAA/recon_11177
+  input=/code2/reconstruction3d_experimental/28-AAAAA/recon_11177
 
 # コンテナ生成ファイルの所有権修正
 docker compose exec -T recon3d chown -R 1001:1001 \
-  /code2/reconstruction_3d/28-AAAAA/recon_11177/results
+  /code2/reconstruction3d_experimental/28-AAAAA/recon_11177/results
 ```
 
 階は `floors/*.json` から**下階から順に**自動で拾う (`1F` `2F` `B1F` `RF` …、
@@ -46,7 +46,7 @@ docker compose exec -T recon3d chown -R 1001:1001 \
 
 ```bash
 docker compose exec -T recon3d python -m pytest \
-  /code2/reconstruction_3d/recon3d/plan2model/tests -v
+  /code2/reconstruction3d_experimental/recon3d/plan2model/tests -v
 ```
 
 ## モジュール構成

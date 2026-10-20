@@ -536,7 +536,7 @@ python main.py plan2model verify input=/data/x     # 2D再投影IoU
 
 ## 6. 実行環境
 
-### 単一イメージ (`reconstruction_3d/Dockerfile`)
+### 単一イメージ (`reconstruction3d_experimental/Dockerfile`)
 
 **PanoVGGT 推論から図面アンカー・書き出しまで、ぜんぶ同じプロセスで走る。**
 以前は PanoVGGT だけ専用 conda env の subprocess だったが、Docker 外で
@@ -554,7 +554,7 @@ docker compose exec -w /opt/recon3d recon3d python main.py run input=...
 |---|---|
 | base | `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime` (PanoVGGT が torch 2.5 系を要求) |
 | PanoVGGT | `/opt/panovggt` に sha 固定で clone (MIT) |
-| コード | `recon3d/` と `main.py` を `/opt/recon3d` へ COPY。**焼いたコードが動く** — `python main.py` は sys.path[0] にスクリプトのディレクトリを置くので PYTHONPATH では上書きできない。編集中のコードを使うときは compose の `working_dir: /code2/reconstruction_3d` 側で動かす |
+| コード | `recon3d/` と `main.py` を `/opt/recon3d` へ COPY。**焼いたコードが動く** — `python main.py` は sys.path[0] にスクリプトのディレクトリを置くので PYTHONPATH では上書きできない。編集中のコードを使うときは compose の `working_dir: /code2/reconstruction3d_experimental` 側で動かす |
 | 重み | **焼かない** (3.9GB)。`PANOVGGT_CKPT` で指す。ローカルは `/home/maren/models`、k8s は PVC / initContainer |
 | 入れていないもの | `mesh/*` (open3d) / pi3・holo (別コンテナ) |
 
@@ -565,12 +565,12 @@ docker compose exec -w /opt/recon3d recon3d python main.py run input=...
 > 既存チャンクを使うステップ (posegraph / anchor / export / 評価) は GPU も
 > PanoVGGT も要らないので、ホストのままで動く。
 
-> **`reconstruction_3d` は 188GB** (28-BBBBB だけで155GB)。
+> **`reconstruction3d_experimental` は 188GB** (28-BBBBB だけで155GB)。
 > `.dockerignore` が `recon3d/` と `main.py` だけに絞っている。外すと
 > ビルドが終わらない。
 
 > **コンテナが書いたファイルは root 所有**になる。ホストから消せないときは
-> `docker compose exec recon3d chown -R 1001:1001 /code2/reconstruction_3d`。
+> `docker compose exec recon3d chown -R 1001:1001 /code2/reconstruction3d_experimental`。
 
 ### Kubernetes / Dagster Pipes
 
@@ -746,7 +746,7 @@ GPU や別コンテナにしか無い依存 (torch / shapely / open3d …) の
 | **per_frame を消すな** | `panovggt_out/pointclouds/per_frame/` は `chain()` のチャンク間ICPが使う中核。消すとチャンクが**再生成できなくなる** |
 | **`stride`/`chunk_size`** | チャンク置き場・マニフェスト・**タグ**をすべて分ける。タグを分けないとチェーン出力を上書きする |
 | **IMU は台帳つきでコピー** | `imu_segments` は `exists()` しか見ないので、古いコピーが残ると入力を差し替えても永久に古い区間が使われる |
-| **`.dockerignore` が無いとビルドが死ぬ** | `reconstruction_3d` は188GB。build context をコードだけに絞る |
+| **`.dockerignore` が無いとビルドが死ぬ** | `reconstruction3d_experimental` は188GB。build context をコードだけに絞る |
 
 ### 黙って間違った結果を出す
 

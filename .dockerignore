@@ -1,4 +1,4 @@
-# **これが無いとビルドが終わらない。** reconstruction_3d は 188GB
+# **これが無いとビルドが終わらない。** reconstruction3d_experimental は 188GB
 # (28-BBBBB だけで155GB、28-AAAAA が33GB)。イメージに要るのはコードだけ。
 *
 !recon3d/

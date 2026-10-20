@@ -1,4 +1,4 @@
-# reconstruction_3d プロジェクト
+# reconstruction3d_experimental プロジェクト
 
 ## 開発目標
 住宅の平面図(CAD出力のJPEG、1/50・A4横300dpi相当・2480x1753)から**3次元モデルを再構成**する。

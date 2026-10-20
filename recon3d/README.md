@@ -58,7 +58,7 @@ python main.py plan2model build  input=/data/x   # glb / obj / report.json
 
 出力は `results/plan2model/`。詳細は [`plan2model/README.md`](plan2model/README.md)。
 
-実行環境: **単一 Docker イメージ** (`reconstruction_3d/Dockerfile`、
+実行環境: **単一 Docker イメージ** (`reconstruction3d_experimental/Dockerfile`、
 compose サービス `recon3d`)。PanoVGGT 推論から図面アンカーまで同一プロセスで走る。
 
 ```bash
@@ -66,7 +66,7 @@ docker compose build recon3d
 docker compose exec recon3d python main.py run input=/data/reconstruction
 ```
 
-> ローカルでは compose が `working_dir: /code2/reconstruction_3d` を設定して
+> ローカルでは compose が `working_dir: /code2/reconstruction3d_experimental` を設定して
 > いるので**マウントした編集中のコード**が動く。イメージに焼いた
 > `/opt/recon3d` は k8s 用 (ENTRYPOINT がそちらを使う)。
 

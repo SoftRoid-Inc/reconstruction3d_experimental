@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-GT_DIR = "/code2/reconstruction_3d/28-AAAAA/zumen"
+GT_DIR = "/code2/reconstruction3d_experimental/28-AAAAA/zumen"
 
 
 @pytest.fixture
