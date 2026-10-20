@@ -42,7 +42,7 @@ from recon3d.core.io_ply import read_ply_xyzrgb, write_ply
 PLY_STRIDE = 8
 YAW_W = 20.0          # ヨー残差[rad]→位置残差[m]相当の重み
 SCALE_W = 5.0         # スケール連続性 log(s_k/s_j) の重み (Sim(3)縮小退化の防止)
-LOG_S_BOUND = 0.35    # |log s| の上限 (s ∈ [0.70, 1.42])
+LOG_S_BOUND = 0.35    # 初期解からの log s のずれ上限 (×0.70〜×1.42)
 LOOP_MIN_GAP = 3      # これ以上チャンク番号が離れた対のみループ候補
 LOOP_RADIUS = 2.0     # 候補判定: チャンク重心距離 (カメラ高=1とした相対単位)
 LOOP_MAX_RESID = 0.12 # ICP残差がこれ以下なら採用 (隣接の実測3〜10cmが目安)
@@ -196,15 +196,34 @@ def solve(meta, edges, yaw_w=YAW_W):
     x0 = np.stack([np.log(s0), psi0, t0[:, 0], t0[:, 1], t0[:, 2]],
                   axis=1)[1:].ravel()
     r0 = float(np.sqrt((resid(x0) ** 2).mean()))
-    lo = np.tile([-LOG_S_BOUND, -np.inf, -np.inf, -np.inf, -np.inf], n - 1)
-    hi = np.tile([LOG_S_BOUND, np.inf, np.inf, np.inf, np.inf], n - 1)
-    x0 = np.clip(x0, lo + 1e-6, hi - 1e-6)
+    # スケールの暴走よけは **初期解 (チェーン) のまわり** に置く。
+    # かつては |log s_k| <= LOG_S_BOUND という絶対値の箱だったが、s_k は
+    # ゲージ chunk0 からの累積なので、素直にドリフトしただけの島で初期解が
+    # 実行可能領域の外に出る (21島中6島で発生)。そうなると
+    #   - ループ0の島で「PG = 逐次連結」の不変条件が静かに崩れる
+    #     (0912_s011: RMS 0 -> 0.0403、ATE 0.215 -> 0.276m)
+    #   - least_squares が**出発点より悪い解**を返す
+    #     (0715_s00: RMS 0.0436 -> 0.0779)
+    # 中心化すれば x0 は常に厳密に内点で、ループ0なら残差0のまま動かない。
+    # 実用域の島 (逐次ATE<=0.3m) 18本の平均ATE 0.123 -> 0.117m
+    # (逐次 0.121m。絶対値の箱は逐次より悪かった)。
+    c = np.log(s0)[1:]
+    inf = np.full(n - 1, np.inf)
+    lo = np.stack([c - LOG_S_BOUND, -inf, -inf, -inf, -inf], axis=1).ravel()
+    hi = np.stack([c + LOG_S_BOUND, inf, inf, inf, inf], axis=1).ravel()
     sol = least_squares(resid, x0, loss="soft_l1", f_scale=0.05, max_nfev=400,
                         bounds=(lo, hi))
     r1 = float(np.sqrt((sol.fun ** 2).mean()))
     print(f"posegraph: {n} chunks, {len(edges)} edges "
           f"(loop {sum(e['kind'] == 'loop' for e in edges)}), "
           f"RMS {r0:.4f} -> {r1:.4f}")
+    drift = float(np.abs(np.log(s0)).max())
+    if drift > LOG_S_BOUND:
+        # 拘束ではなく**警告**として出す。累積スケールがここまで動く島は
+        # フロントエンドのスケールドリフトを抱えている (実測: 当たった島の
+        # 逐次ATE中央値 0.23m に対し、当たらなかった島は 0.05m)
+        print(f"  [warn] 累積スケールが x{np.exp(drift):.2f} まで動いている "
+              "(フロントエンドのスケールドリフト。ループが無いと直せない)")
     return unpack(sol.x), r1
 
 
