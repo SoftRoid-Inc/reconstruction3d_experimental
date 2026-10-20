@@ -291,7 +291,13 @@ STEPS = {s.name: s for s in (
          needs=("anchor",), caps=("anchor",)),
 )}
 
-DEFAULT_STEPS = ("prep", "chains", "eval")
+# `api.run(x)` を steps 省略で呼んだときの既定。**`conf/recon.yaml` の
+# `steps` と同じに保つこと** — CLI は yaml を、ライブラリ利用はこちらを
+# 見るので、ずれると「同じことをしたつもりが別の段が走る」。
+# `tests/check_imports.py` が一致を見張る。
+# eval は入れない: GT と図面実寸の両方が要る開発用の段で、本番入力では
+# 必ず skip される
+DEFAULT_STEPS = ("prep", "chains", "anchor", "export")
 
 
 # ------------------------------------------------------------------ 依存解決

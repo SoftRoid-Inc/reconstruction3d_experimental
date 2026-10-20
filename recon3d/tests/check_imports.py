@@ -163,7 +163,31 @@ def main():
     for m, why in sig:
         print(f"    {m}: {why}")
     rc |= bool(sig)
+
+    ds = default_steps_match()
+    print(f"[{'OK' if not ds else 'NG'}] 既定の段が yaml と一致すること"
+          + (f" — {ds}" if ds else ""))
+    rc |= bool(ds)
     return rc
+
+
+def default_steps_match():
+    """`steps.DEFAULT_STEPS` と `conf/recon.yaml` の `steps` のずれ
+
+    CLI は yaml を、`api.run(x)` は DEFAULT_STEPS を見る。ずれると
+    「同じことをしたつもりが別の段が走る」ので、片方だけ直すのを防ぐ。
+    yaml は hydra 無しでも読めるよう素のテキストから拾う。
+    """
+    import re
+    from recon3d.steps import DEFAULT_STEPS
+    y = (ROOT / "recon3d" / "conf" / "recon.yaml").read_text()
+    m = re.search(r"^steps:\s*\[([^\]]*)\]", y, re.M)
+    if not m:
+        return "recon.yaml の steps を読めない"
+    yaml_steps = tuple(s.strip() for s in m.group(1).split(",") if s.strip())
+    if yaml_steps != tuple(DEFAULT_STEPS):
+        return f"yaml {list(yaml_steps)} != DEFAULT_STEPS {list(DEFAULT_STEPS)}"
+    return None
 
 
 if __name__ == "__main__":
