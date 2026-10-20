@@ -8,9 +8,9 @@
 
 実行例 (コンテナ内):
     python /code2/reconstruction3d_experimental/cubicasa/align_gt.py \
-        /code2/reconstruction3d_experimental/28-AAAAA/zumen/1F.json \
-        /code2/reconstruction3d_experimental/28-AAAAA/zumen/2F.json \
-        --out-dir /code2/reconstruction3d_experimental/28-AAAAA/gt_aligned
+        /code2/reconstruction3d_experimental/<物件>/zumen/1F.json \
+        /code2/reconstruction3d_experimental/<物件>/zumen/2F.json \
+        --out-dir /code2/reconstruction3d_experimental/<物件>/gt_aligned
 
 出力: <out-dir>/<stem>.json (labelme形式, 元は無改変) と <stem>_after.png (確認用)
 """

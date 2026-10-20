@@ -1,8 +1,17 @@
 import json
+import os
 
 import pytest
 
-GT_DIR = "/code2/reconstruction3d_experimental/28-AAAAA/zumen"
+#: GT図面 (labelme) の置き場。**物件を特定する名前をコードに持たない**ため
+#: 環境変数で渡す。未設定なら GT を使うテストは skip する。
+#:
+#:   PLAN2MODEL_GT_DIR=/code2/<repo>/<物件>/zumen python -m pytest ...
+GT_DIR = os.environ.get("PLAN2MODEL_GT_DIR", "")
+
+#: `@pytest.mark.skipif(NO_GT, reason=NO_GT_REASON)` で使う
+NO_GT = not (GT_DIR and os.path.isdir(GT_DIR))
+NO_GT_REASON = "PLAN2MODEL_GT_DIR 未設定 (GT図面の置き場を指すこと)"
 
 
 @pytest.fixture

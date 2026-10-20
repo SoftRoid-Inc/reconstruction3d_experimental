@@ -3,8 +3,8 @@
 
 コンテナ (compose サービス: cubicasa) 内での実行例:
     python /code2/reconstruction3d_experimental/cubicasa/run_cubicasa.py \
-        /code2/reconstruction3d_experimental/28-DDDDD/zumen/1F.jpg \
-        /code2/reconstruction3d_experimental/28-DDDDD/zumen/2F.jpg \
+        /code2/reconstruction3d_experimental/<物件>/zumen/1F.jpg \
+        /code2/reconstruction3d_experimental/<物件>/zumen/2F.jpg \
         --scales 0.5 0.75 1.0 --fp16
 
 出力 (--out 以下、画像名/スケールごと):

@@ -1,5 +1,7 @@
 from recon3d.plan2model.loader import Rect, load_labelme, load_prediction, load_floor
-from recon3d.plan2model.tests.conftest import GT_DIR
+import pytest
+
+from recon3d.plan2model.tests.conftest import GT_DIR, NO_GT, NO_GT_REASON
 
 
 def test_rect_normalizes_and_props():
@@ -32,6 +34,7 @@ def test_load_floor_dispatch(tiny_labelme, tiny_prediction):
     assert len(load_floor(tiny_prediction, "1F").walls) == 1
 
 
+@pytest.mark.skipif(NO_GT, reason=NO_GT_REASON)
 def test_load_real_gt():
     fp = load_floor(GT_DIR + "/1F.json", "1F")
     assert fp.image_size == (2480, 1753)

@@ -3,7 +3,7 @@ import pytest
 from recon3d.plan2model.calibrate import centerline_span_px, cross_check_scale, scale_mm_per_px
 from recon3d.plan2model.config import ReconConfig
 from recon3d.plan2model.loader import load_floor
-from recon3d.plan2model.tests.conftest import GT_DIR
+from recon3d.plan2model.tests.conftest import GT_DIR, NO_GT, NO_GT_REASON
 
 
 def test_centerline_span_synthetic(tiny_labelme):
@@ -16,6 +16,7 @@ def test_centerline_span_synthetic(tiny_labelme):
         centerline_span_px(fp, "y")
 
 
+@pytest.mark.skipif(NO_GT, reason=NO_GT_REASON)
 def test_scale_on_real_gt_1f():
     fp = load_floor(GT_DIR + "/1F.json", "1F")
     span = centerline_span_px(fp, "x")
@@ -26,6 +27,7 @@ def test_scale_on_real_gt_1f():
     assert err < 0.01                     # 縦寸法との整合 1%未満
 
 
+@pytest.mark.skipif(NO_GT, reason=NO_GT_REASON)
 def test_2f_span_matches_module():
     fp = load_floor(GT_DIR + "/2F.json", "2F")
     fp1 = load_floor(GT_DIR + "/1F.json", "1F")

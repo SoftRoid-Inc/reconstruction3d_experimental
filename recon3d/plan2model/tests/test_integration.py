@@ -6,9 +6,10 @@ import trimesh
 
 from recon3d.plan2model.build import build_model
 from recon3d.plan2model.config import ReconConfig
-from recon3d.plan2model.tests.conftest import GT_DIR
+from recon3d.plan2model.tests.conftest import GT_DIR, NO_GT, NO_GT_REASON
 
 
+@pytest.mark.skipif(NO_GT, reason=NO_GT_REASON)
 def test_build_28_11177(tmp_path):
     cfg = ReconConfig()
     report = build_model(
@@ -43,6 +44,7 @@ from recon3d.plan2model.loader import load_floor
 from recon3d.plan2model.verify import reprojection_iou, save_overlay
 
 
+@pytest.mark.skipif(NO_GT, reason=NO_GT_REASON)
 def test_reprojection_matches_gt(tmp_path):
     cfg = ReconConfig()
     plan_1f = load_floor(GT_DIR + "/1F.json", "1F")
