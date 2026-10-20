@@ -299,7 +299,7 @@ def main(paths, argv=None):
     ap.add_argument("--mode", default="span",
                     help="ends / ends2 / ends4 (端をstride刻みで拾う) / span / both")
     ap.add_argument("--no-mask", action="store_true")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     js = ([tuple(int(v) for v in args.junction.split(":"))] if args.junction
           else junctions(paths))

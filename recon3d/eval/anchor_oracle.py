@@ -99,7 +99,7 @@ def main(paths, argv=None):
                     choices=("slab", "mapany", "gt"),
                     help="スケール事前の供給源 (postproc/scale_prior)")
     ap.add_argument("--s-rel-tol", type=float, default=0.4,
-                    help="事前スケールの許容相対幅 (既定0.4=±40%)")
+                    help="事前スケールの許容相対幅 (既定0.4=±40%%)")
     ap.add_argument("--top-k", type=int, default=12, help="候補数の上限")
     ap.add_argument("--s-sweep", default=None,
                     help="事前スケールの倍率を掃引 (例 0.7,0.85,1.0,1.2,1.4)")

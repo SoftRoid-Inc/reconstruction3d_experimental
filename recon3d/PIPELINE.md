@@ -589,6 +589,7 @@ recon3d/
     _hydra.py          hydra設定読み込みの共通部
   tests/             pytest 無しでも走る素のスクリプト
     check_paths.py     実物の入力で Paths を確かめる
+    check_tools.py     全ツールに -h を通す (署名・argv・help の %)
     check_imports.py   import スモーク + 「paths を省けない」こと
 ```
 
@@ -602,6 +603,8 @@ recon3d/
 python -m recon3d.tests.check_imports           # import + paths の規約
 RECON3D_FIXTURE=/data/recon_0912 \
   python -m recon3d.tests.check_paths           # 実物で Paths を確かめる
+RECON3D_FIXTURE=/data/recon_0912 \
+  python -m recon3d.tests.check_tools           # 全ツールに -h を通す
 ```
 
 `check_imports` が見るのは3つ:
@@ -611,6 +614,10 @@ RECON3D_FIXTURE=/data/recon_0912 \
 | 全モジュールの import | 図面やGTを import 時に読んで、アンカー経路ごと落ちる形 |
 | `paths` に既定値を置かない | 渡し忘れが「黙って別物を読む」に戻る形 (2026-10-09の事故) |
 | 本番入口が `paths` を受ける | どこかに所在を固定し直してしまった形 |
+
+`check_tools` は `main.py tool <name>` の49本に `-h` を通す。import では
+出ない「実行して初めて落ちる」3種 — `main(paths, argv)` でない署名 /
+`parse_args()` の argv 渡し忘れ / `help` の `%` 取りこぼし — を拾う。
 
 GPU や別コンテナにしか無い依存 (torch / shapely / open3d …) の
 `ModuleNotFoundError` は環境差として除外する — 退行ではない。

@@ -182,6 +182,9 @@ def _has_gt(paths):
 
 
 def main(paths, argv=None):
+    """入力の能力 (何が揃っていて何が足りないか) を表示する"""
+    import argparse
+    argparse.ArgumentParser(description=__doc__).parse_args(argv)
     c = detect(paths)
     print(f"dataset {paths.name}  root {paths.root}")
     print(f"frames  {len(paths.frame_indices)}枚  (0..{paths.n_frames - 1})")

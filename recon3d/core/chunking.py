@@ -415,7 +415,7 @@ def main(paths, argv=None):
                     help="チャンクストライド (既定12=重なり4f。8で重なり8f)")
     ap.add_argument("--no-idle", action="store_true",
                     help="静止区間での切断を無効化 (対照実験用)")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     run_batch(paths, args.max_seg, args.manifest_out, args.chunks_dir,
               args.segments,
               args.stride, use_idle=not args.no_idle)

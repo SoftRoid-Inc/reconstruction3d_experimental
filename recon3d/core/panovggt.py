@@ -226,7 +226,7 @@ def main(paths, argv=None):
     ap.add_argument("--tag", default=None,
                     help="出力サブディレクトリ名 (results/pcd/<tag>/)。省略時はpcd直下")
     ap.add_argument("--no-mask", action="store_true")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     out_dir = paths.pcd / args.tag if args.tag else paths.pcd
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -387,7 +387,7 @@ def main(paths, argv=None):
     ap.add_argument("--exclude", default=UNTRUSTED_JSON,
                     help="ポーズ不信フレームのjson (yaw_fixのpose_untrusted.json)。"
                          "該当フレームは島から外し橋補間にする。'' で無効化")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     islands = ([tuple(v.split(":")) for v in args.islands]
                if args.islands else ISLANDS)
     exclude = set()

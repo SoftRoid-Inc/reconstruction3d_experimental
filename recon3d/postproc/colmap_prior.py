@@ -98,7 +98,7 @@ def main(paths, argv=None):
                     help="COLMAPのスケールドリフトをPanoVGGT実尺で補正する: "
                          "チャンク毎fitスケールs_k(=COLMAP単位/m)を物差しに、"
                          "軌跡の各ステップを実寸へ直して再積分 (長尺セッション用)")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     centers, _ = colmap_centers(args.model)
     print(f"COLMAP registered frames: {len(centers)}")

@@ -230,6 +230,6 @@ def main(paths, argv=None):
                                  "local_points.npzに保存 (深度のみ利用=案2用)")
             sp.add_argument("--nc", action="store_true",
                             help="非商用フルモデル (facebook/map-anything) を使う")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     (run_infer if args.cmd == "infer" else run_baseline)(args)
 

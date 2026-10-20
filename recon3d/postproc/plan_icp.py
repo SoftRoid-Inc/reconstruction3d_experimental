@@ -375,7 +375,7 @@ def main(paths, argv=None):
                     help="全島+チャンク補正+全体軌跡の組み立てと評価")
     ap.add_argument("--masked", action="store_true",
                     help="マスク付きチャンク(chunks_masked / island*_m)を使う")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     gt = load_gt(paths)
     if args.full:
         run_full(paths, args.masked, gt)

@@ -64,8 +64,19 @@ def build_viewer(paths, xyz, rgb, sfx=""):
     print(f"-> {paths.backend / f'viewer{sfx}.html'} ({len(xyz):,} pts)")
 
 
-def main(paths, sfx=""):
-    xyz, rgb = read_ply_xyzrgb(paths.backend / f"aligned_house{sfx}.ply")
+def main(paths, argv=None):
+    """整列済み点群から確認PNGと単体ビューアを作り直す"""
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--sfx", default=None,
+                    help="PLY名の接尾辞 aligned_house<sfx>.ply "
+                         "(既定: export が書く _<入力名>_auto)")
+    args = ap.parse_args(argv)
+    sfx = args.sfx if args.sfx is not None else f"_{paths.name}_auto"
+    ply = paths.backend / f"aligned_house{sfx}.ply"
+    if not ply.exists():
+        raise SystemExit(f"整列済み点群が無い: {ply} (先に export を回すこと)")
+    xyz, rgb = read_ply_xyzrgb(ply)
     render_check(paths, xyz, rgb, sfx)
     build_viewer(paths, xyz, rgb, sfx)
 

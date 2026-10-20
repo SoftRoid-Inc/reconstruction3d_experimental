@@ -63,4 +63,7 @@ def materialize_imu(paths, verbose=True):
 
 
 def main(paths, argv=None):
+    """入力の imu/ を results/imu/ へ台帳つきで取り込む"""
+    import argparse
+    argparse.ArgumentParser(description=__doc__).parse_args(argv)
     materialize_imu(paths)

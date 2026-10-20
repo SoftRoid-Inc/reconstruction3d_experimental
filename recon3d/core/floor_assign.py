@@ -138,7 +138,7 @@ def main(paths, argv=None):
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--template", action="store_true", help="雛形を出力")
     g.add_argument("--check", action="store_true", help="割当を確認")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     manifest = json.loads((paths.bench / args.manifest).read_text())
     if args.template:
         template(paths, manifest, args.name)

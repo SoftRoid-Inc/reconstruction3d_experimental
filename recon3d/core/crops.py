@@ -91,6 +91,6 @@ def main(paths, argv=None):
     ap.add_argument("--pitch", type=float, default=10.0, help="仰角 (deg)")
     ap.add_argument("--size", type=int, default=518, help="出力解像度(正方)")
     ap.add_argument("--tag", default="mapany_f130")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     generate(paths, args.fov, args.yaw, args.pitch, args.size, args.tag)
 

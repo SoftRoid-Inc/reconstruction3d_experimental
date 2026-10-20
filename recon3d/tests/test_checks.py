@@ -3,10 +3,11 @@
 ホストには pytest が入っていないので、実体は素のスクリプトに置いてある。
   python -m recon3d.tests.check_imports
   RECON3D_FIXTURE=<入力dir> python -m recon3d.tests.check_paths
+  RECON3D_FIXTURE=<入力dir> python -m recon3d.tests.check_tools
 """
 import pytest
 
-from recon3d.tests import check_imports, check_paths
+from recon3d.tests import check_imports, check_paths, check_tools
 from recon3d.tests.conftest import fixture_dir
 
 
@@ -29,3 +30,11 @@ def test_fixture_paths():
     if d is None:
         pytest.skip("RECON3D_FIXTURE 未設定")
     assert not check_paths.failures(d)
+
+
+def test_tools_dispatch():
+    d = fixture_dir()
+    if d is None:
+        pytest.skip("RECON3D_FIXTURE 未設定")
+    bad = check_tools.failures(d)
+    assert not bad, "\n".join(f"{n}: {w}" for n, w in bad)
