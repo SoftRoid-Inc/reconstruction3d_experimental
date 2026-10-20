@@ -1,47 +1,46 @@
+"""recon3d のテスト共通ヘルパ (pytest 非依存)
+
+`recon3d.config` はプロセス単位で凍結する (約90モジュールが
+`from recon3d.config import X` で値を束ねるため `reload` では戻らない)。
+よってセッションに依存する検査は**すべて子プロセス**で行う。
+
+ホストに pytest が無くても困らないよう、検査は素のスクリプトとして書き
+(`checks/`)、pytest があれば `test_checks.py` が同じ関数を呼ぶ。
+"""
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
-import pytest
-
-GT_DIR = "/code2/reconstruction_3d/28-AAAAA/zumen"
-
-
-@pytest.fixture
-def tiny_labelme(tmp_path):
-    """壁2(縦横)・柱1・窓1・ドア1の最小labelme。画像100x80px想定。"""
-    data = {
-        "imageWidth": 100, "imageHeight": 80,
-        "shapes": [
-            {"label": "wall", "shape_type": "rectangle",
-             "points": [[10.0, 10.0], [90.0, 14.0]]},          # 横壁
-            {"label": "wall", "shape_type": "rectangle",
-             "points": [[90.0, 70.0], [86.0, 10.0]]},          # 縦壁(点順が逆)
-            {"label": "column", "shape_type": "rectangle",
-             "points": [[10.0, 10.0], [14.0, 14.0]]},
-            {"label": "window", "shape_type": "rectangle",
-             "points": [[30.0, 9.0], [50.0, 15.0]]},
-            {"label": "door", "shape_type": "rectangle",
-             "points": [[60.0, 9.5], [75.0, 14.5]]},
-        ],
-    }
-    p = tmp_path / "t.json"
-    p.write_text(json.dumps(data))
-    return str(p)
+ROOT = Path(__file__).resolve().parents[2]      # reconstruction_3d/
+SNAP_DIR = Path(__file__).resolve().parent / "snapshots"
 
 
-@pytest.fixture
-def tiny_prediction(tmp_path):
-    data = {
-        "image_size": [100, 80],
-        "walls": [
-            {"id": 0, "polygon": [[10, 10], [90, 10], [90, 14], [10, 14]],
-             "is_column": False},
-            {"id": 1, "polygon": [[86, 10], [90, 10], [90, 14], [86, 14]],
-             "is_column": True},
-        ],
-        "windows": [{"polygon": [[30, 9], [50, 9], [50, 15], [30, 15]]}],
-        "doors": [],
-        "rooms": [],
-    }
-    p = tmp_path / "p.json"
-    p.write_text(json.dumps(data))
-    return str(p)
+def run_py(code, session=None, timeout=300, **env_extra):
+    """`python -c code` を子プロセスで実行して (returncode, stdout, stderr)"""
+    env = {**os.environ, "PYTHONPATH": str(ROOT)}
+    env.pop("IMG_SESSION", None)
+    if session is not None:
+        env["IMG_SESSION"] = str(session)
+    env.update({k: str(v) for k, v in env_extra.items()})
+    p = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env,
+                       capture_output=True, text=True, timeout=timeout)
+    return p.returncode, p.stdout, p.stderr
+
+
+def run_json(code, session=None, **kw):
+    """子プロセスの**最終行**をJSONとして読む (前段のprintに邪魔されない)"""
+    rc, out, err = run_py(code, session=session, **kw)
+    if rc != 0:
+        raise RuntimeError(f"exit {rc}\n{err[-3000:]}")
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    if not lines:
+        raise RuntimeError(f"出力なし\n{err[-3000:]}")
+    return json.loads(lines[-1])
+
+
+def known_sessions():
+    """いまレジストリに居るセッション名 (ext/ の有無で変わる)"""
+    return run_json("import json, recon3d.config as c; "
+                    "print(json.dumps(sorted(c.PROPERTY)))")

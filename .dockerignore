@@ -1,13 +1,12 @@
 # **これが無いとビルドが終わらない。** reconstruction_3d は 188GB
 # (28-BBBBB だけで155GB、28-AAAAA が33GB)。イメージに要るのはコードだけ。
 *
-!img_align/
 !recon3d/
 !main.py
 
 # コードの中の重いもの・環境依存のもの
 **/__pycache__/
 **/*.pyc
-img_align/results/
-img_align/tests/snapshots/
-img_align/vendor/
+recon3d/results/
+recon3d/tests/snapshots/
+recon3d/plan2model/tests/

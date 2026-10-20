@@ -1,5 +1,15 @@
-# cubicasaコンテナへの追加依存 (docker compose exec cubicasa pip install -r ...)
-# 既存ピン (numpy1.24.4/scipy1.9.3/shapely1.8.5/matplotlib<3.9) を壊さないこと
-trimesh
-mapbox_earcut
-pytest
+# conda env: img_align (python 3.11)
+# conda create -n img_align python=3.11 -y
+# conda run -n img_align pip install -r requirements.txt
+torch
+torchvision
+transformers
+py360convert
+opencv-python
+pillow
+matplotlib
+tqdm
+gdown
+scipy
+shapely
+scikit-learn
