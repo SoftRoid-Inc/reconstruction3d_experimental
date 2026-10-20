@@ -161,7 +161,36 @@ recon3d(軌跡生成・3D再構築・図面合わせ)を、`/home/maren/git/pipe
 recon_ff 側の位置が別コードで出た数字では直接比べられない。
 どう揃えるかは未決(下記 D)。
 
-### 6. アンカーできなかった島も必ず出す(設計者の判断)
+### 6. `ReconEngineEnum.RECON3D` として `reconstruction` asset に足す。前段は自前
+
+依頼者の決定。recon_ff の中間成果物を食う後段パイプにはしない。
+`ReconEngineEnum` に `RECON3D` を足して `reconstruction` asset の engine 分岐に
+乗せるので、`run_recon.py --engine recon3d` がそのまま投入手段になる。
+
+代償として、チャンクは recon_ff と別に持つことになる(recon_ff 側は
+224MB〜4.5GB/件 × 245件が既に S3。recon3d は窓16/stride12 の別形式)。
+置き場と GPU 時間を見積もること。
+
+### 7. IMU 由来物は prepro の成果物をそのまま使う
+
+**recon3d の入力契約と一致している。** `prepro_gpu` の `imu_pdr` stage が
+S3 に上げるのは3つ:
+
+| S3 キー deriver | recon3d 側 |
+|---|---|
+| `get_imu_floor_transitions_json_key` | `imu/transitions.json`(島の切断点) |
+| `get_imu_idle_spans_json_key` | `imu/idle_spans.json`(静止区間) |
+| `get_imu_pdr_csv_key` | (recon3d は未使用。`USE_PDR_BRIDGE` の実験経路のみ) |
+
+> **builder check の訂正**: レビューは「prepro から出るのは `imu_pdr.csv` と
+> idle 判定だけなので、telemetry_parser + frame_times + stairnet の移植が別途
+> 要る」と報告したが、**誤り**。階段遷移の JSON も prepro が上げている
+> (`pipes/prepro_gpu/src/stages/imu_pdr.py:73-77`)。移植は不要。
+
+階の割当は recon3d の `backend/floor_assign.json`(手動)に対し、pipeline 側は
+運用者の `FloorAssignment`(floor.csv 由来)。ここは変換を1枚挟む。
+
+### 8. アンカーできなかった島も必ず出す(設計者の判断)
 
 recon3d はアンカー失敗島・階未割当島・36フレーム未満の島を落とす。
 採点の分母は全正解フレームなので、黙って落とすと実力より遥かに悪い行になる。
@@ -172,39 +201,43 @@ recon_ff の `drawing_fit` が既に同じ方針を採っている — 「フィ
 
 ## 未決(依頼者が決めること)
 
-### A. 前段を recon3d で触り続けるか
+### 9. マイルストーンを2つに割る(スケールが揃うまで図面合わせは比較できない)
 
-アンチゴールの2つ目(前段の二重持ち)への対処として、
-**recon3d が軌跡生成を自前で持つのをやめ、recon_ff の中間成果物
-(`chunks` / `fit_input`。S3 に残る)を入力にする**案がある。
+依頼者の回答: `m_per_unit` は**将来 MapAnything で出す**予定、図面の mm/px は
+**将来 floor.csv のようにアノテーションする**予定。どちらも今は無い。
 
-- 利点: 二重が消える。前段が揃うので、recon_ff と recon3d の差が
-  **図面合わせの差だけに由来する**ことになり、比較が公平になる。
-- 代償: recon3d 側で前段をいじる研究が止まる。実際、ポーズグラフの
-  スケール境界(2026-10-20 に修正)も累積スケールドリフト(×2.31 の島)も
-  前段の問題として残っている。
+したがって:
 
-**この問いは最後に投げたまま未回答。** 答えで変わるのは pipe の形だけでなく、
-以下も付いてくる(レビューで判明):
+| | 比べるもの | 要るもの | いつ |
+|---|---|---|---|
+| **M1** | 軌跡の**形**(`形の正答率%` / `形残差`) | フレーム + prepro の IMU 成果物のみ。**図面もスケールも不要** | いますぐ |
+| **M2** | 図面合わせ(位置) | mm/px アノテーション + MapAnything 由来の `m_per_unit` | 両方が揃ってから |
 
-- **島の切り方が丸ごと変わる。** recon3d の本番経路は `imu/transitions.json`
-  (stairnet)+ `idle_spans.json` + 手動 `floor_assign.json`。pipeline の
-  `reconstruction` 経路には**どれも無い** — recon_ff は運用者の
-  `FloorAssignment`(floor.csv 由来)でフロア分割し、IMU を見ない。
-  自前で持つなら telemetry_parser + frame_times + stairnet の移植が別途要る。
-- **チャンクの二重保管。** recon_ff のチャンクは 224MB〜4.5GB/件 × 245件が
-  既に S3 にあり、再生成は約23分/件の GPU。recon3d は窓16/stride12・間引き無しの
-  別形式(1件13GB級)。別に持つなら数TBの置き場と GPU 時間を見積もる必要がある。
-- **DAG への刺し方が決まる。** 「流用」なら recon_ff の下流に別 asset を置く形に
-  なるが、`run_recon.py --engine` の choices と `ReconEngineEnum` に乗らないので
-  **投入手段を別途作ることになる**。「自前」なら `ReconEngineEnum` に
-  `RECON3D` を足して `reconstruction` asset の engine 分岐に乗せられ、
-  `run_recon.py --engine recon3d` がそのまま使える。
+M1 が今すぐ成立するのは、recon3d が図面なしでも軌跡生成まで走るから
+(`core/caps` が `anchor` を能力不足で skip する)。そして
+`eval/README.md` が「**今 engine を跨いで比べられるのは `形の正答率%` と
+`形残差` だけ**」と言っているので、M1 の指標は既存の土俵にそのまま乗る。
 
-### B. 図面合わせの入力。スケールは**2系統**あり、どちらも pipeline に無い
+**M2 までは recon3d を「落ちずに完走して当たらない」状態で回さないこと。**
+スケールが無いまま図面アンカーを走らせると `slab`(誤差97〜383%)に落ち、
+`match_corners` の ±40% 探索窓に正解が入らない。
 
-当初「壁注釈 + `known_width_mm`」と1つに書いたが、レビューで2系統あることが
-分かった。**どちらも245件側に存在しない。**
+### 10. M1 の採点は `score_recon.py` に足す(設計者の判断)
+
+`eval/src/engine_recon3d.py`(`load` / `tracks_of`)を書き、`_load()` に分岐を
+足し、`--engine` に名前を増やす。M1 の指標は形だけで、形は README が
+「engine を跨いで比べられる」と保証している範囲なので、recon_ff の独自ハーネスと
+突き合わせる必要が無い。
+
+**位置(M2)で recon_ff と直接比べる段になったら、採点経路の二重を解消する
+必要がある**(`engine_recon_ff.py` を書いて `score_recon.py` 側へ移すか、
+recon3d を `pipes/recon_ff/eval/` 側に入れるか)。M2 の課題として残す。
+
+## 未決(依頼者が決めること)
+
+### B. 図面合わせの入力(M2 の前提)
+
+**どちらも「将来出す」段階で、今は245件側に存在しない。**
 
 - **(a) 図面の mm/px** — `floors/meta.json` の `known_width_mm`。pipeline 側の
   図面情報は `floor.csv` の `floor_id` + `image_url` だけで、正解も
@@ -217,13 +250,17 @@ recon_ff の `drawing_fit` が既に同じ方針を採っている — 「フィ
   **±40% しか探索しない**ので、`slab` に落ちると正解の仮説が生成されない。
   245件には較正履歴も macond タグも無い。
 
-**放置すると recon3d は落ちずに完走して当たらない。** `PIPELINE.md` が
-名指ししている失敗形そのもの。
+依頼者の回答: (b) は MapAnything で出す予定、(a) は floor.csv のように
+アノテーションする予定。**残る問いは「いつ・何件」**で、それが M2 の開始条件と
+対象件数を決める。
 
 加えて壁の出どころ: recon3d は人手の labelme 注釈、recon_ff は
 `steps/cubicasa.py`。CubiCasa は精度不足で再学習待ち。
+M2 で recon3d の壁を CubiCasa にするのか、注釈のある物件に限るのかも未決。
 
-### C. 比較の勝敗は何で決めるのか。対象は何件か
+### C. M2 の勝敗は何で決めるのか。対象は何件か
+
+(M1 の指標は上記 9 で決まった — 形の正答率% と形残差。)
 
 目標4は「勝った方式を recon_ff に統合」だが判定基準が無い。しかも両者は
 差し替え可能な同型ではない — **recon_ff はスケールも壁注釈も要らず全件回る、
@@ -233,15 +270,6 @@ recon3d は両方要る**。手で注釈した少数で recon3d が勝っても�
 指標(位置の正答率? 形残差? セグメント数?)・対象サブセット・「勝ち」と呼ぶ差を
 決めないと、(a) 何件に注釈を発注するか(B)が決まらず、(b)「芯を剥がす」投資の
 是非も判断できない。
-
-### D. 採点経路をどう揃えるか
-
-§5 の通り、recon_ff と dfsfm は別ハーネスで採点されている。3案:
-
-1. `engine_recon_ff.py` も書いて recon_ff を `score_recon.py` 側へ移す
-   (eval 側の工数が数倍)
-2. recon3d を recon_ff の `pipes/recon_ff/eval/` ハーネス側に入れる
-3. cairn 上の突き合わせだけで妥協する(形の指標に限る)
 
 ### E. `reconstruction3d_experimental` の公開先
 
