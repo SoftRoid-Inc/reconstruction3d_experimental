@@ -218,22 +218,35 @@ def build_manifest(paths: Paths, windows: Sequence[tuple[int, int]],
 MODEL_DIRS = {"pv": ("chunks", "pv")}
 
 
-def infer_chunks(paths: Paths, model: str,
-                 windows: Sequence[tuple[int, int]],
+def model_dirs(model: str) -> tuple[str, str]:
+    """モデル名 -> (チャンク置き場, タグ接頭辞)。未知なら実行可能な形で落とす
+
+    レジストリを直接引くと `KeyError: 'pi3'` になって、設定のどのキーが
+    悪いのか分からない。門番はここ1箇所。
+    """
+    if model not in MODEL_DIRS:
+        raise SystemExit(
+            f"未知の chunking.model {model!r} (有効: {', '.join(MODEL_DIRS)})")
+    return MODEL_DIRS[model]
+
+
+def infer_chunks(paths: Paths, windows: Sequence[tuple[int, int]],
                  needed: Iterable[int], chunks_dir: str,
                  entries: Sequence[dict]) -> None:
     """欠けているチャンクだけ推論する (既存はスキップ=再開可能)
 
     1チャンクずつモデルを読み直すと固定コスト12.2秒が毎回かかる
     (実推論は16フレームで9秒)。まとめて1プロセスに渡して1回に抑える。
+
+    `stair_remerge` からも呼ぶ。あちらは隣接2島を隙間ごと仮連結するので、
+    `imu_segments` が切り落とした域のチャンク (どの島にも属さない) を
+    ここで初めて要求する — 0912 で63本中19本がそれに当たる。
     """
     miss = [(k, *windows[k]) for k in needed
             if not (paths.pcd / chunks_dir / f"chunk_{k:02d}"
                     / "cameras.npz").exists()]
     if not miss:
         return
-    if model != "pv":
-        raise SystemExit(f"未知のモデル {model!r} (有効: pv)")
     from recon3d.core.panovggt import run_chunks
     print(f"[pv] {len(miss)} チャンクを一括推論", flush=True)
     run_chunks(paths, miss, entries, chunks_dir, use_mask=True)
@@ -255,7 +268,7 @@ def run_batch(paths: Paths, max_seg: int | None = None,
     **tag_suffix は stride/chunk_size を変えるとき必須**。チャンク置き場と
     マニフェストを分けてもタグが同名だと `frontend_bench/<タグ>/` を上書きして
     しまう (2026-10-16に重なり6枚の検証で重なり4枚のチェーンを消した)。"""
-    dflt_dir, prefix = MODEL_DIRS[model]
+    dflt_dir, prefix = model_dirs(model)
     chunks_dir = chunks_dir or dflt_dir
     manifest_out = manifest_out or f"{prefix}_manifest.json"
     n = len(paths.frame_indices)
@@ -270,7 +283,7 @@ def run_batch(paths: Paths, max_seg: int | None = None,
               f"..{m['chunks'][-1]}")
 
     needed = sorted({k for m in manifest for k in m["chunks"]})
-    infer_chunks(paths, model, windows, needed, chunks_dir, entries)
+    infer_chunks(paths, windows, needed, chunks_dir, entries)
 
     for m in manifest:
         cdirs = [paths.pcd / chunks_dir / f"chunk_{k:02d}" for k in m["chunks"]]
@@ -358,8 +371,8 @@ def stair_remerge(paths: Paths, manifest: Manifest,
                   chunks_dir: str = "chunks",
                   manifest_out: str = "pv_manifest.json",
                   max_gap: int = 120, max_len: int | None = None,
-                  stride: int | None = None, max_seg: int | None = None,
-                  model: str = "pv") -> Manifest:
+                  stride: int | None = None,
+                  max_seg: int | None = None) -> Manifest:
     """偽切断の癒合: 隣接島を隙間ごと仮連結し、幾何検査がcleanなら統合する
 
     stairnetの過検出 (はしご・脚立) は島を無駄に分断し、間の端切れが
@@ -373,6 +386,8 @@ def stair_remerge(paths: Paths, manifest: Manifest,
         max_len = int(max_seg) if max_seg else 160
     n = len(paths.frame_indices)
     windows = chunk_windows(n, stride)
+    # フレーム1枚ごとに exists() を見るので、ループの中で作り直さない
+    entries = select_entries(paths, f"0:{n}:1")
     manifest = sorted(manifest, key=lambda m: m["a"])
     tried = set()
     changed = True
@@ -397,8 +412,7 @@ def stair_remerge(paths: Paths, manifest: Manifest,
             print(f"[remerge] {m1['tag']}+{m2['tag']} (gap {gap}f) を試行",
                   flush=True)
             try:
-                entries = select_entries(paths, f"0:{n}:1")
-                infer_chunks(paths, model, windows, use, chunks_dir, entries)
+                infer_chunks(paths, windows, use, chunks_dir, entries)
                 chain_and_save(paths, cdirs, tag)
                 s = find_stair(*island_vertical(paths, tag))
             except Exception as e:

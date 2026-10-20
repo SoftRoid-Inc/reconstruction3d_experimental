@@ -109,12 +109,12 @@ def _prep(ctx: Ctx) -> None:
 
 def _chains(ctx: Ctx) -> None:
     """チャンク推論 + 区間別チェーン (既存チャンクはスキップされる)"""
-    from recon3d.core.chunking import MODEL_DIRS, run_batch
+    from recon3d.core.chunking import model_dirs, run_batch
     model = ctx.get("chunking.model", "pv")
     stride = ctx.get("chunking.stride")
     chunk_size = ctx.get("chunking.chunk_size")
     max_seg = ctx.get("chunking.max_seg", 160) or None
-    base, prefix = MODEL_DIRS[model]
+    base, prefix = model_dirs(model)
     # stride / chunk_size を変えたら**チャンク置き場もタグも**分ける。
     # タグを分けないと frontend_bench/<タグ>/ を上書きして既定の結果が消える
     var = (f"_s{stride}" if stride else "") + \
@@ -154,7 +154,7 @@ def _chains(ctx: Ctx) -> None:
         # IMU過検出(はしご等)の偽切断を癒合してカバーを回復
         manifest = stair_remerge(ctx.paths, manifest, chunks_dir=ctx.chunks_dir,
                                  manifest_out=manifest_out, stride=stride,
-                                 max_seg=max_seg, model=model)
+                                 max_seg=max_seg)
         # IMU区間は階ラベルを持たない。手動割当があれば流し込む
         from recon3d.core.floor_assign import apply as apply_floors
         manifest = apply_floors(ctx.paths, manifest)
