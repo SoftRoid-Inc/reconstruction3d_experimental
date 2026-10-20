@@ -14,6 +14,10 @@
 使い方: python main.py tool anchor --input /data/x
 出力: results/backend/{trajectory.json, trajectory_{1F,2F}.jpg, eval.json}
 """
+from __future__ import annotations
+
+from typing import Any
+
 import json
 import math
 
@@ -30,9 +34,24 @@ from recon3d.postproc.plan_match import match_floor
 from recon3d.core.geometry import rotation_to_y
 from recon3d.postproc.density_map import slab_peaks
 from recon3d.eval.gt_traj import mm_per_px, load_gt
+
+
+def _mpx(paths) -> float:
+    """メートル換算 [mm/px]。無ければ落とす
+
+    mm/px が決まらない入力 (図面の実寸なし) では、ここから先の「何メートル
+    ずれている」という話が全部意味を失う。黙って続けない。
+    """
+    v = mm_per_px(paths)
+    if v is None:
+        raise SystemExit(
+            "図面の実寸が未設定なのでメートル換算できない "
+            f"({paths.floors}/meta.json の known_width_mm)")
+    return v
 from recon3d.core.plan_grid import PlanGrid
 from recon3d.core.io_ply import read_ply_xyzrgb
 from recon3d.postproc.plan_icp import cells_to_px, icp_to_walls, segs_to_cells, similarity_from_grid, transform_pts, wall_segments_px
+from recon3d.paths import Paths
 
 
 CELL_M = 0.05
@@ -61,7 +80,8 @@ UNTRUSTED_JSON = ""
 
 
 
-def prepare_island(paths, tag, mpu=None):
+def prepare_island(paths: Paths, tag: str,
+                   mpu: float | None = None) -> dict[str, Any]:
     """連結島 → 重力整列・z反転・スケール推定・密度v2 (照合入力の辞書を返す)
 
     mpu指定時はスケール推定(カメラ高さ仮定)をスキップして固定する
@@ -138,7 +158,7 @@ def prepare_island(paths, tag, mpu=None):
             "density_pts": w, **extras}
 
 
-def island_map_yaw(paths, tag):
+def island_map_yaw(paths: Paths, tag: str) -> float:
     """島のカメラ群の密度(row,col)系ヨー中央値 (島間の相対ヨー導出用)"""
     from recon3d.core.chaining import med_yaw
     d = np.load(paths.bench / tag / "global_cameras.npz")
@@ -146,7 +166,7 @@ def island_map_yaw(paths, tag):
     return med
 
 
-def _match_relaxed(grid, density, cam_rc, **kw):
+def _match_relaxed(grid, density, cam_rc, **kw) -> dict[str, Any] | None:
     """カメラ妥当性ゲートを段階的に緩めながら照合 (密なフレーム列は壁際・
     階段のカメラ比率が高く、固定0.8では正解候補ごと弾かれることがある)"""
     import recon3d.postproc.plan_match as af
@@ -160,9 +180,10 @@ def _match_relaxed(grid, density, cam_rc, **kw):
     return None
 
 
-def anchor_island(paths, tag, floor, gt, ref=None,
-                  anchored_so_far=None, allow_mirror=True, thetas=None,
-                  scales=None, mpu=None):
+def anchor_island(paths: Paths, tag: str, floor: str, gt,
+                  ref: dict[str, Any] | None = None,
+                  anchored_so_far=None, allow_mirror: bool = True,
+                  thetas=None, scales=None, mpu: float | None = None):
     """島を図面へ: グリッド照合 → ICP精密化 → フレームpx辞書
 
     ref={'th_deg':…, 'psi':…} を渡すと、同フロアの既照合島との相対ヨー
@@ -176,7 +197,7 @@ def anchor_island(paths, tag, floor, gt, ref=None,
         [(d["cam_pos_aligned"][:, 2] - d["origin"][1]) / d["cell_units"],
          (d["cam_pos_aligned"][:, 0] - d["origin"][0]) / d["cell_units"]], axis=1)
     if ref is None:
-        kw = {"allow_mirror": allow_mirror}
+        kw: dict[str, Any] = {"allow_mirror": allow_mirror}
         if thetas is not None:
             kw["thetas"] = thetas
             kw["scales"] = np.geomspace(0.3, 1.6, 24)
@@ -214,7 +235,7 @@ def anchor_island(paths, tag, floor, gt, ref=None,
                 px = cells_to_px(transform_pts(cam_rc[j][None], s0, th0, t0),
                                  grid)[0]
                 dist_m = math.dist(px, anchored_so_far[k_near]) \
-                    * mm_per_px(paths) / 1000
+                    * _mpx(paths) / 1000
                 print(f"  branch theta={b['theta']} score={b['score']:.3f} "
                       f"continuity {dist_m:.2f}m (frame {frames[j]} vs "
                       f"{k_near})")
@@ -261,13 +282,14 @@ def anchor_island(paths, tag, floor, gt, ref=None,
             for n, p in zip(d["names"], px)}, resid, info
 
 
-def _stair_frames(paths):
+def _stair_frames(paths: Paths) -> set[int]:
     """階段区間のフレーム集合 (IMU検出。無ければ空)"""
     from recon3d.core.stair_check import imu_stair_ranges
     return {f for a, b in imu_stair_ranges(paths) for f in range(a, b + 1)}
 
 
-def assemble_and_eval(paths, anchored, floors, gt, label=""):
+def assemble_and_eval(paths: Paths, anchored, floors, gt,
+                      label: str = "") -> dict[str, Any]:
     """全編組み立て(ギャップ補間)→GT評価→軌跡図。labelは出力ファイルの接尾辞"""
     paths.backend.mkdir(parents=True, exist_ok=True)
     # ギャップ補間用のIMU PDR軌跡 — 既定OFF (実測でbridge誤差1.9→3.3mに悪化。
@@ -277,9 +299,10 @@ def assemble_and_eval(paths, anchored, floors, gt, label=""):
     pdr_path = paths.backend.parent / "imu" / "pdr.npz"
     if os.environ.get("USE_PDR_BRIDGE") and pdr_path.exists():
         z = np.load(pdr_path)
-        pdr = (z["frames"], z["pos"] * 1000 / mm_per_px(paths))  # m→図面px
+        pdr = (z["frames"], z["pos"] * 1000 / _mpx(paths))  # m→図面px
 
     def pdr_at(f):
+        assert pdr is not None       # USE_PDR_BRIDGE のときだけ呼ばれる
         fr, pos = pdr
         return np.array([np.interp(f, fr, pos[:, 0]),
                          np.interp(f, fr, pos[:, 1])])
@@ -339,7 +362,7 @@ def assemble_and_eval(paths, anchored, floors, gt, label=""):
             continue
         n_eval += 1
         e = math.dist((tkr["x_px"], tkr["y_px"]),
-                      (gt[g]["x_px"], gt[g]["y_px"])) * mm_per_px(paths) / 1000
+                      (gt[g]["x_px"], gt[g]["y_px"])) * _mpx(paths) / 1000
         if tkr["floor"] == gt[g]["floor"]:
             floor_ok += 1
         key = ("stair" if tkr["frame"] in stair_set
@@ -378,7 +401,7 @@ def assemble_and_eval(paths, anchored, floors, gt, label=""):
     return summary
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--islands", nargs="*", default=None,

@@ -23,8 +23,12 @@
   python main.py tool island_group --input /data/x            # 群れを書く
   python main.py tool island_group --input /data/x --dry-run  # 判定だけ
 """
+from __future__ import annotations
+
 import argparse
 import json
+from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 
@@ -32,6 +36,8 @@ from recon3d.core.bridge import (bridge_transform, consensus, junction_kind,
                                    manifest_islands)
 from recon3d.core.geometry import apply, compose
 from recon3d.core.io_ply import read_ply_xyzrgb, write_ply
+from recon3d.paths import Paths
+from recon3d.types import GroupT, Manifest, Sim3
 
 CONSENSUS_OK_M = 1.2    # 一致度[m]がこれ未満の切れ目だけ繋ぐ
                         # 一致度は **m_per_unit でメートルに正規化済み**
@@ -44,13 +50,16 @@ MAX_PLY_POINTS = 4_000_000         # 点群出力の上限 (ディスク逼迫�
 GROUP_PREFIX = "grp"
 
 
-def _eye():
+def _eye() -> Sim3:
     return (1.0, np.eye(3), np.zeros(3))
 
 
-def build_groups(paths, modes=MODES, thresh=CONSENSUS_OK_M,
-                 skip_cross_floor=False,
-                 verbose=True, manifest_name=None):
+def build_groups(paths: Paths, modes: Sequence[str] = MODES,
+                 thresh: float = CONSENSUS_OK_M,
+                 skip_cross_floor: bool = False,
+                 verbose: bool = True,
+                 manifest_name: str | None = None
+                 ) -> list[tuple[Manifest, GroupT]]:
     """島を群れにまとめる。[(島リスト, {tag: 群れ先頭ゲージへの変換})]
 
     `manifest_name` は `--model pi3` / `--manifest-out` で既定から外れる。
@@ -77,7 +86,7 @@ def build_groups(paths, modes=MODES, thresh=CONSENSUS_OK_M,
             print(f"  {A['tag']} -> {B['tag']} [{kind}/"
                   f"{'またぎ' if cross else '同一'}] {why}"
                   f"  -> {'繋ぐ' if ok else '切る'}")
-        if ok:
+        if ok and Tba is not None:          # ok の時点で非None (型検査用)
             T[B["tag"]] = compose(T[A["tag"]], Tba)
             cur.append(B)
         else:
@@ -87,7 +96,7 @@ def build_groups(paths, modes=MODES, thresh=CONSENSUS_OK_M,
     return groups
 
 
-def group_tag(islands):
+def group_tag(islands: Manifest) -> str:
     """群れのタグ。1島なら島タグのまま (無駄な別名を作らない)"""
     if len(islands) == 1:
         return islands[0]["tag"]
@@ -95,7 +104,8 @@ def group_tag(islands):
     return f"{GROUP_PREFIX}{sess}_{islands[0]['a']}_{islands[-1]['b']}"
 
 
-def write_group(paths, islands, T, with_points=True):
+def write_group(paths: Paths, islands: Manifest, T: GroupT,
+                with_points: bool = True) -> tuple[str, Path]:
     """群れの結合チェーンを frontend_bench/<群れタグ>/ に島と同形式で書く"""
     tag = group_tag(islands)
     if len(islands) == 1:
@@ -145,7 +155,8 @@ def write_group(paths, islands, T, with_points=True):
     return tag, out
 
 
-def split_by_floor(groups):
+def split_by_floor(groups: list[tuple[Manifest, GroupT]]
+                   ) -> list[tuple[Manifest, GroupT]]:
     """群れを階の変わり目で割る (橋の変換は保ったまま)
 
     **アンカーは単一フロアを前提**にしているので、階をまたぐ群れをそのまま
@@ -166,7 +177,8 @@ def split_by_floor(groups):
     return out
 
 
-def group_manifest(paths, groups, with_points=True):
+def group_manifest(paths: Paths, groups: list[tuple[Manifest, GroupT]],
+                   with_points: bool = True) -> Manifest:
     """群れを階で割って書き出し、アンカーが食えるマニフェスト形式で返す"""
     out = []
     for islands, T in split_by_floor(groups):
@@ -177,7 +189,7 @@ def group_manifest(paths, groups, with_points=True):
     return out
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--modes", nargs="*", default=list(MODES))
     ap.add_argument("--thresh", type=float, default=CONSENSUS_OK_M)

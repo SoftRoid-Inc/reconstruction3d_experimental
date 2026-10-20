@@ -7,6 +7,8 @@
 
 出力: results/pcd/align_{1F,2F}.jpg / trajectory_pano.jpg / align_summary.json
 """
+from __future__ import annotations
+
 import json
 import math
 
@@ -20,6 +22,10 @@ from scipy import ndimage
 from scipy.signal import fftconvolve
 
 from recon3d.core.plan_grid import PlanGrid
+from typing import Any
+
+from recon3d.paths import Paths
+from recon3d.types import F64, Points2, Scalar
 
 THETA_STEP_DEG = 3
 SCALES = np.geomspace(0.5, 1.1, 12)   # PanoVGGT点群は実寸より膨張する傾向が
@@ -29,7 +35,8 @@ BG_PENALTY = 0.25                     # 屋内自由空間に密度が乗った�
 CAM_FEAS_MIN = 0.8                    # カメラの8割以上が屋内自由空間に載ること
 
 
-def warp_density(density, theta_deg, s):
+def warp_density(density: F64, theta_deg: Scalar,
+                 s: Scalar) -> tuple[F64, Any]:
     """密度マップを回転+スケールした配列と、順変換関数を返す
 
     順変換: u = s * R(θ) @ (v - c_in) + shift  (v,uは(row,col)配列座標)
@@ -57,7 +64,9 @@ def warp_density(density, theta_deg, s):
     return warped, transform_pts
 
 
-def camera_feasibility(grid, corr_shape, warped_shape, cam_cells):
+def camera_feasibility(grid, corr_shape: tuple[int, int],
+                       warped_shape,
+                       cam_cells: Points2) -> F64:
     """配置(=corrの添字)ごとに、屋内自由空間に載るカメラの割合を返す"""
     feas = np.zeros(corr_shape, dtype=np.float32)
     vp = grid.valid_pose.astype(np.float32)
@@ -71,7 +80,7 @@ def camera_feasibility(grid, corr_shape, warped_shape, cam_cells):
     return feas / len(cam_cells)
 
 
-def mirror_variants(density, cam_rc):
+def mirror_variants(density: F64, cam_rc: Points2):
     """鏡映なし/あり の2仮説 (点群world座標系の掌性が図面と逆の場合に対応)"""
     yield False, density, cam_rc
     rc = cam_rc.copy()
@@ -79,7 +88,8 @@ def mirror_variants(density, cam_rc):
     yield True, np.ascontiguousarray(density[:, ::-1]), rc
 
 
-def density_and_rc_for(d, best, rc):
+def density_and_rc_for(d: dict, best: dict,
+                       rc: Points2) -> tuple[F64, Points2]:
     """bestのmirrorフラグに応じて密度マップとrc座標を変換して返す"""
     dens = d["density"]
     if best.get("mirror"):
@@ -89,8 +99,9 @@ def density_and_rc_for(d, best, rc):
     return dens, rc
 
 
-def match_floor(grid, density, cam_rc, cell_ratio,
-                allow_mirror=True, thetas=None, scales=None):
+def match_floor(grid, density: F64, cam_rc: Points2, cell_ratio: float,
+                allow_mirror: bool = True, thetas=None,
+                scales=None) -> dict[str, Any] | None:
     """1フロア分の全探索。cell_ratio = 密度セル(m)/図面セル(m) (通常1.0)
 
     スコア = precision (密度質量が図面の壁近傍に乗る割合)
@@ -141,7 +152,8 @@ def match_floor(grid, density, cam_rc, cell_ratio,
     return best
 
 
-def model_to_plan_px(pts_xz, d, best, grid, cell_ratio):
+def model_to_plan_px(pts_xz: Points2, d: dict, best: dict, grid,
+                     cell_ratio: float) -> Points2:
     """モデル座標(x,z) → 図面px座標"""
     rc = np.stack([(pts_xz[:, 1] - d["origin"][1]) / d["cell_units"],
                    (pts_xz[:, 0] - d["origin"][0]) / d["cell_units"]], axis=1)
@@ -154,7 +166,8 @@ def model_to_plan_px(pts_xz, d, best, grid, cell_ratio):
     return px
 
 
-def draw(grid, bg, d, best, cell_ratio, cam_px, names, path, title):
+def draw(grid, bg, d: dict, best: dict, cell_ratio: float,
+         cam_px: Points2, names, path, title: str) -> None:
     dens, _ = density_and_rc_for(d, best, np.zeros((1, 2)))
     warped, _ = warp_density(dens, best["theta"], best["s"] * cell_ratio)
     canvas = np.zeros((grid.ny, grid.nx))
@@ -181,7 +194,7 @@ def draw(grid, bg, d, best, cell_ratio, cam_px, names, path, title):
     plt.close(fig)
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag", default=None)

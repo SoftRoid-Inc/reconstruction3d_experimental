@@ -461,7 +461,7 @@ def cmd_verify(paths, args):
 def cmd_poisson(paths, args):
     """Poisson表面再構成 (精製版): 法線の向きを軌跡カメラで決めてから再構成"""
     import open3d as o3d
-    from scipy.spatial import cKDTree
+    from scipy.spatial import cKDTree  # type: ignore[attr-defined]
 
     from recon3d.mesh.collision_mesh import CURTAIN_COLORS, PLY_NAME
     from recon3d.core.io_ply import read_ply_xyzrgb
@@ -605,7 +605,7 @@ def wall_distance_stats(paths, pts, floor):
         tt = np.linspace(0, 1, n)
         samp.append(np.stack([x1 + tt * (x2 - x1), y1 + tt * (y2 - y1)], 1))
     samp = np.concatenate(samp)
-    from scipy.spatial import cKDTree
+    from scipy.spatial import cKDTree  # type: ignore[attr-defined]
     d_s, _ = cKDTree(p).query(samp, k=1)
     return {"median_m": round(float(np.median(best)), 4),
             "p90_m": round(float(np.percentile(best, 90)), 4),

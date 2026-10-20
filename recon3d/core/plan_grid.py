@@ -3,13 +3,17 @@
 plan2model のGTパースと実測スケール校正を再利用し、壁+柱/開口の距離場カーネル、
 屋内自由空間 (valid_pose) を持つセルグリッドを作る。
 """
+from __future__ import annotations
+
 import math
 
 import numpy as np
 from scipy import ndimage
 
+from recon3d.paths import Paths
 from recon3d.plan2model.calibrate import scale_mm_per_px
 from recon3d.plan2model.loader import load_labelme
+from recon3d.types import BoolArr, F64
 
 RES_M = 0.05            # グリッド解像度 (m/セル)
 SIGMA_WALL_M = 0.20     # 壁一致カーネル幅
@@ -18,7 +22,7 @@ MIN_WALL_CLEAR_M = 0.2  # カメラ位置は壁からこれ以上離れている
 
 
 class PlanGrid:
-    def __init__(self, paths, floor_name):
+    def __init__(self, paths: Paths, floor_name: str) -> None:
         plan = load_labelme(paths.floors / f"{floor_name}.json", floor_name)
         self.name = floor_name
         kw = paths.known_width_mm
@@ -50,8 +54,9 @@ class PlanGrid:
 
         wall = self._raster(rects_wall)
         opening = self._raster(rects_open)
-        d_wall = ndimage.distance_transform_edt(~wall) * RES_M
-        d_open = ndimage.distance_transform_edt(~opening) * RES_M
+        # scipy のスタブは `| None` を返す形なので配列として受け直す
+        d_wall = np.asarray(ndimage.distance_transform_edt(~wall)) * RES_M
+        d_open = np.asarray(ndimage.distance_transform_edt(~opening)) * RES_M
         self.k_wall = np.exp(-((d_wall / SIGMA_WALL_M) ** 2))
         self.k_open = np.exp(-((d_open / SIGMA_OPEN_M) ** 2))
         # レイ透過ペナルティ用: 壁(開口以外)のセル
@@ -59,10 +64,11 @@ class PlanGrid:
 
         # GTの壁は開口(窓・扉)の位置で途切れているため、外周の閉包には開口も含める
         ring = ndimage.binary_closing(wall | opening, iterations=2)
-        interior = ndimage.binary_fill_holes(ring) & ~wall & ~opening
+        interior = np.asarray(ndimage.binary_fill_holes(ring)) \
+            & ~wall & ~opening
         self.valid_pose = interior & (d_wall > MIN_WALL_CLEAR_M)
 
-    def _raster(self, rects):
+    def _raster(self, rects) -> BoolArr:
         mask = np.zeros((self.ny, self.nx), dtype=bool)
         for r in rects:
             cx0 = int((r.x1 - self.x0_px) / self.cell_px)
@@ -72,5 +78,5 @@ class PlanGrid:
             mask[max(0, cy0): cy1 + 1, max(0, cx0): cx1 + 1] = True
         return mask
 
-    def cell_to_px(self, cx, cy):
+    def cell_to_px(self, cx: float, cy: float) -> tuple[float, float]:
         return self.x0_px + cx * self.cell_px, self.y0_px + cy * self.cell_px

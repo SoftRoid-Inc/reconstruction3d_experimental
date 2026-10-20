@@ -9,6 +9,10 @@
 使い方: python main.py tool plan_icp --input /data/x --island islandA --floor 1F
         (--chunks 0:5 --chunks-dir chunks を足すとチャンク単位補正+軌跡評価まで)
 """
+from __future__ import annotations
+
+from pathlib import Path
+
 import argparse
 import json
 import math
@@ -30,6 +34,8 @@ from recon3d.postproc.density_map import scale_from_local_floors, slab_peaks
 from recon3d.eval.gt_traj import mm_per_px, evaluate_track, load_gt
 from recon3d.core.plan_grid import RES_M, PlanGrid
 from recon3d.core.io_ply import read_ply_xyzrgb
+from recon3d.paths import Paths
+from recon3d.types import F64, Points2, Points3, Scalar
 
 CELL_M = 0.05
 Y_BIN_M = 0.20           # 高さビン幅
@@ -42,7 +48,7 @@ ICP_CUTOFF_END = 3.0
 
 # ---------------------------------------------------------------- 密度 v2
 
-def build_density2(paths, tag):
+def build_density2(paths: Paths, tag: str) -> Path:
     """島/チャンクの points.ply から高さスパン重み密度を作る (density2.npz)"""
     d = paths.pcd / tag
     xyz, _ = read_ply_xyzrgb(d / "points.ply")
@@ -91,7 +97,7 @@ def build_density2(paths, tag):
 
 # ---------------------------------------------------------------- 図面の壁線分
 
-def wall_segments_px(paths, floor):
+def wall_segments_px(paths: Paths, floor: str) -> F64:
     """GT壁+柱の中心線分 (図面px座標)"""
     plan = load_labelme(paths.floors / f"{floor}.json", floor)
     segs = []
@@ -103,7 +109,7 @@ def wall_segments_px(paths, floor):
     return np.array(segs, dtype=np.float64)
 
 
-def wall_face_segments_px(paths, floor):
+def wall_face_segments_px(paths: Paths, floor: str) -> F64:
     """GT壁+柱の両面ライン (壁厚を尊重)。工事中は間柱「面」が写るため、
     中心線ICPより面ICPの方がスケールバイアスが出ない (0312で実証)"""
     plan = load_labelme(paths.floors / f"{floor}.json", floor)
@@ -120,7 +126,7 @@ def wall_face_segments_px(paths, floor):
 
 # ---------------------------------------------------------------- ICP
 
-def similarity_from_grid(best, d, grid):
+def similarity_from_grid(best, d, grid) -> tuple[float, float, F64]:
     """align_floorplanのグリッド解 → 明示的な相似変換 (density_m座標→plan cell座標)
 
     plan_cell = s/RES_M * R(θ) @ (p_m - c_m) + t_cell
@@ -140,19 +146,21 @@ def similarity_from_grid(best, d, grid):
     return s, th, t  # cell→cell: u = s R v + t
 
 
-def transform_pts(pts, s, th, t):
+def transform_pts(pts: Points2, s: Scalar, th: Scalar, t) -> Points2:
     R = np.array([[math.cos(th), -math.sin(th)],
                   [math.sin(th), math.cos(th)]])
     return (s * (pts @ R.T)) + t
 
 
-def icp_to_walls(pts_cell, segs_cell, s, th, t):
+def icp_to_walls(pts_cell: Points2, segs_cell: F64, s: Scalar,
+                 th: Scalar, t) -> tuple[Scalar, Scalar, F64, float]:
     """point-to-line ICP。pts_cell: (N,2) density配列セル座標 (row,col)。
     segs_cell: (M,4) plan cell座標 (row1,col1,row2,col2)。返り値: (s,θ,t,残差m)"""
     a = segs_cell[:, :2]
     b = segs_cell[:, 2:]
     ab = b - a
     ab2 = (ab ** 2).sum(axis=1).clip(min=1e-9)
+    dmin = m = None
     for it in range(ICP_ITERS):
         cutoff = ICP_CUTOFF_START + (ICP_CUTOFF_END - ICP_CUTOFF_START) \
             * it / max(ICP_ITERS - 1, 1)
@@ -181,29 +189,31 @@ def icp_to_walls(pts_cell, segs_cell, s, th, t):
         s = float(np.trace(np.diag(D) @ S) / (sc ** 2).sum() * len(sc))
         th = math.atan2(R2[1, 0], R2[0, 0])
         t = mu_d - s * R2 @ mu_s
+    if dmin is None or m is None:        # ICP_ITERS=0 など、1回も回らなかった
+        return s, th, t, float("nan")
     resid_m = float(np.median(dmin[m])) * RES_M if m.sum() else float("nan")
     return s, th, t, resid_m
 
 
 # ---------------------------------------------------------------- メイン
 
-def density_wall_points(d, thr=0.15):
+def density_wall_points(d: dict, thr: float = 0.15) -> Points2:
     zz, xx = np.nonzero(d["density"] > thr)
     return np.stack([zz, xx], axis=1).astype(np.float64)
 
 
-def cams_to_cells(d):
+def cams_to_cells(d: dict) -> Points2:
     cp = d["cam_pos_aligned"]
     return np.stack([(cp[:, 2] - d["origin"][1]) / d["cell_units"],
                      (cp[:, 0] - d["origin"][0]) / d["cell_units"]], axis=1)
 
 
-def cells_to_px(cells, grid):
+def cells_to_px(cells: Points2, grid) -> Points2:
     return np.stack([grid.x0_px + cells[:, 1] * grid.cell_px,
                      grid.y0_px + cells[:, 0] * grid.cell_px], axis=1)
 
 
-def segs_to_cells(segs_px, grid):
+def segs_to_cells(segs_px: F64, grid) -> F64:
     out = np.empty_like(segs_px)
     out[:, 0] = (segs_px[:, 1] - grid.y0_px) / grid.cell_px
     out[:, 1] = (segs_px[:, 0] - grid.x0_px) / grid.cell_px
@@ -212,7 +222,7 @@ def segs_to_cells(segs_px, grid):
     return out
 
 
-def refine_island(paths, tag, floor, gt):
+def refine_island(paths: Paths, tag: str, floor: str, gt) -> dict:
     """密度v2再構築 → グリッド照合(align_floorplan) → ICP精密化 → GT評価"""
     import subprocess
     import sys
@@ -266,7 +276,7 @@ def refine_island(paths, tag, floor, gt):
             "mirror_col": mirror_col}
 
 
-def fit_similarity(src, dst):
+def fit_similarity(src: Points2, dst: Points2) -> tuple[float, float, F64]:
     """2D相似 (dst ≈ s R src + t) の閉形式解"""
     mu_s, mu_d = src.mean(axis=0), dst.mean(axis=0)
     sc, dc = src - mu_s, dst - mu_d
@@ -282,7 +292,8 @@ def fit_similarity(src, dst):
     return s, th, t
 
 
-def refine_chunks(paths, floor, chunk_ids, chunks_dir, island_cam_cells,
+def refine_chunks(paths: Paths, floor, chunk_ids, chunks_dir,
+                  island_cam_cells,
                   grid, gt):
     """改善2: チャンクごとにICP補正して島内ドリフトを吸収し、フレーム位置を集める
 
@@ -329,7 +340,7 @@ ISLANDS = [("islandA{s}", "1F", range(0, 5)),
            ("islandC{s}", "1F", range(12, 13))]
 
 
-def run_full(paths, masked, gt):
+def run_full(paths: Paths, masked, gt) -> None:
     sfx = "_m" if masked else ""
     chunks_dir = "chunks_masked" if masked else "chunks"
     assembled = {}
@@ -367,7 +378,7 @@ def run_full(paths, masked, gt):
     print(f"-> {out}")
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--island")
     ap.add_argument("--floor")

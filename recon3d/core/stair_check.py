@@ -8,11 +8,15 @@ stairnet(IMU)の見逃し(短い2F→3F等、0616/0925で実測)への保険。
 カメラ中央高の距離=カメラ高相当(units)で正規化する。階高2.9m ≈ カメラ高
 1.3〜1.5mの約2倍なので、閾値1.5×カメラ高は歩行の上下動(±0.1h)とは桁で分かれる。
 """
+from __future__ import annotations
+
 import numpy as np
 
 from recon3d.core.geometry import rotation_to_y
 from recon3d.core.io_ply import read_ply_xyzrgb
 from recon3d.postproc.density_map import slab_peaks
+from recon3d.paths import Paths
+from recon3d.types import F64, I64
 
 WIN_FRAMES = (12, 24, 40)   # 変位を測る窓の候補 (階段は10〜40フレームで昇りきる)
 DISP_FACTOR = 1.5     # カメラ高に対する跨ぎ判定閾値
@@ -20,7 +24,7 @@ EDGE_KEEP = 0.7       # 切断範囲 = |変位|がピークのこの倍率を超
 SMOOTH_K = 5
 
 
-def island_vertical(paths, tag):
+def island_vertical(paths: Paths, tag: str) -> tuple[I64, F64, float]:
     """島タグ → (フレーム昇順, 平滑化済み鉛直カメラ位置, カメラ高相当units)"""
     d = np.load(paths.bench / tag / "global_cameras.npz")
     names = [str(n) for n in d["names"]]
@@ -45,7 +49,8 @@ def island_vertical(paths, tag):
     return frames, ys, h
 
 
-def find_stair(frames, ys, h):
+def find_stair(frames: I64, ys: F64,
+               h: float) -> tuple[int, int, float, str] | None:
     """鉛直異常の検出。無ければNone、あれば
     (切断開始fr, 切断終了fr, 変位/カメラ高, kind)。
     kind: "transition"=レベルが変わる(階段) / "excursion"=元のレベルへ戻る
@@ -90,7 +95,7 @@ def find_stair(frames, ys, h):
     return int(frames[a_i]), int(frames[b_i]), m / h, kind
 
 
-def check_island(paths, tag):
+def check_island(paths: Paths, tag: str) -> tuple[int, int, float, str] | None:
     """便宜関数: タグを検査して結果を表示。跨ぎがあれば切断範囲を返す"""
     frames, ys, h = island_vertical(paths, tag)
     s = find_stair(frames, ys, h)
@@ -103,7 +108,7 @@ def check_island(paths, tag):
     return s
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("tags", nargs="+")
@@ -112,7 +117,7 @@ def main(paths, argv=None):
         check_island(paths, t)
 
 
-def imu_stair_ranges(paths, pad=6):
+def imu_stair_ranges(paths: Paths, pad: int = 6) -> list[tuple[int, int]]:
     """IMU検出の階段区間 [(a, b)]。無ければ空
 
     かつては SESSION_CFG の手動注釈 (STAIR_ASCEND/DESCEND) を使っていたが、

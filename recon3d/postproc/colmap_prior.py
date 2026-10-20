@@ -11,6 +11,8 @@ COLMAPカメラ中心へ個別にSim(3)フィットすれば、チャンク間�
 使い方: python main.py tool colmap_prior --input /data/x --model <sparse/0> \
           --chunks-root results/pcd/chunks_0312 --islands A:0:10 B:11:19 C:20:22
 """
+from __future__ import annotations
+
 import argparse
 import json
 import math
@@ -22,9 +24,11 @@ import numpy as np
 from recon3d.core.chaining import load_chunk
 from recon3d.core.geometry import sim3_umeyama, apply
 from recon3d.core.io_ply import read_ply_xyzrgb
+from recon3d.paths import Paths
+from recon3d.types import F64, Mat3, Points3
 
 
-def read_colmap_images_bin(path):
+def read_colmap_images_bin(path) -> dict:
     """images.bin → {image_name: (qvec(4), tvec(3))} (COLMAP: world→cam)"""
     out = {}
     with open(path, "rb") as f:
@@ -46,7 +50,7 @@ def read_colmap_images_bin(path):
     return out
 
 
-def qvec_to_R(q):
+def qvec_to_R(q) -> Mat3:
     w, x, y, z = q
     return np.array([
         [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
@@ -54,7 +58,7 @@ def qvec_to_R(q):
         [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
 
 
-def colmap_centers(model_dir):
+def colmap_centers(model_dir) -> tuple[dict[int, Points3], dict[int, Mat3]]:
     """{frame番号: カメラ中心(world)} と {frame番号: R(world→cam)}"""
     imgs = read_colmap_images_bin(Path(model_dir) / "images.bin")
     centers, rots = {}, {}
@@ -70,7 +74,8 @@ def colmap_centers(model_dir):
     return centers, rots
 
 
-def fit_chunk_to_colmap(names, positions, centers, trim=0.2):
+def fit_chunk_to_colmap(names, positions: Points3, centers,
+                        trim: float = 0.2) -> tuple | None:
     """チャンクカメラ中心→COLMAP中心のSim(3) (残差上位trim割合を捨てて再フィット)"""
     frames = [int(n.replace("frame_", "")) for n in names]
     m = [i for i, fr in enumerate(frames) if fr in centers]
@@ -87,7 +92,7 @@ def fit_chunk_to_colmap(names, positions, centers, trim=0.2):
     return T, float(np.median(r)), len(m)
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, help="COLMAP sparseモデル dir")
     ap.add_argument("--chunks-root", required=True)
@@ -118,7 +123,8 @@ def main(paths, argv=None):
         chunk_data = []
         for cdir in cdirs:
             names, pos, poses, _, untrusted = load_chunk(cdir)
-            T, resid, n_match = fit_chunk_to_colmap(names, pos, centers)
+            fit = fit_chunk_to_colmap(names, pos, centers)
+            T, resid, n_match = fit if fit is not None else (None, None, 0)
             if T is None:
                 print(f"  {cdir.name}: COLMAP対応不足 ({n_match}) -> skip")
                 continue

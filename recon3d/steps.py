@@ -11,10 +11,18 @@
 
   python main.py steps      # 一覧 (name / 説明 / 依存 / 必要な能力)
 """
+from __future__ import annotations
+
 import graphlib
 import json
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Sequence, TypeVar, overload
+
+from recon3d.core.caps import Caps
+from recon3d.paths import Paths
+from recon3d.types import Manifest, Opt
+
+_T = TypeVar("_T")
 
 
 @dataclass
@@ -24,17 +32,26 @@ class Ctx:
     `paths` が「どのデータセットか」を持つ唯一の場所。環境変数も
     モジュール凍結も使わず、ここから各ステップへ引数で配る。
     """
-    paths: object = None
-    opt: dict = field(default_factory=dict)
-    manifest: Optional[list] = None     # 島 or 群れのマニフェスト
+    paths: Paths                   # どのデータセットか (必須)
+    opt: Opt = field(default_factory=dict)
+    manifest: Optional[Manifest] = None     # 島 or 群れのマニフェスト
     chunks_dir: Optional[str] = None
     tag_suffix: str = ""
-    caps: object = None
-    order: tuple = ()              # この実行で走るステップ (前提の補完ずみ)
-    skipped: dict = field(default_factory=dict)   # step -> 理由
+    caps: Optional[Caps] = None
+    order: tuple[str, ...] = ()    # この実行で走るステップ (前提の補完ずみ)
+    skipped: dict[str, str] = field(default_factory=dict)   # step -> 理由
 
-    def get(self, path, default=None):
-        """opt["chunking"]["stride"] を opt.get("chunking.stride") で引く"""
+    @overload
+    def get(self, path: str) -> Any: ...
+    @overload
+    def get(self, path: str, default: _T) -> _T: ...
+
+    def get(self, path: str, default: Any = None) -> Any:
+        """opt["chunking"]["stride"] を opt.get("chunking.stride") で引く
+
+        既定値を渡した場合はその型がそのまま返り値の型になる
+        (`ctx.get("chunking.use_idle", True)` は bool)。
+        """
         cur = self.opt
         for k in path.split("."):
             if not isinstance(cur, dict) or k not in cur:
@@ -42,19 +59,40 @@ class Ctx:
             cur = cur[k]
         return default if cur is None else cur
 
+    @property
+    def islands(self) -> Manifest:
+        """いま対象にしている島 (bridge 後は群れ)
+
+        `chains` が走れば必ず入る。None のまま読むのは依存宣言の漏れ
+        (`needs=("chains",)` を書き忘れた) なので、曖昧に落ちずに言う。
+        """
+        if self.manifest is None:
+            raise RuntimeError(
+                "島マニフェストがまだ無い — このステップが chains より先に"
+                " 走っている。Step の needs に chains を入れること")
+        return self.manifest
+
+    @property
+    def chunks(self) -> str:
+        """チャンク置き場のディレクトリ名 (`chains` が決める)"""
+        if self.chunks_dir is None:
+            raise RuntimeError(
+                "chunks_dir が未設定 — chains より先に走っている")
+        return self.chunks_dir
+
 
 @dataclass(frozen=True)
 class Step:
     name: str
     doc: str
-    run: Callable                  # (Ctx) -> None
-    needs: Tuple[str, ...] = ()    # 無ければ自動で足す前提ステップ
-    before: Tuple[str, ...] = ()   # 両方選ばれたときだけ効く順序制約
-    caps: Tuple[str, ...] = ()     # 欠けたら skip する能力
+    run: Callable[["Ctx"], None]
+    needs: tuple[str, ...] = ()    # 無ければ自動で足す前提ステップ
+    before: tuple[str, ...] = ()   # 両方選ばれたときだけ効く順序制約
+    caps: tuple[str, ...] = ()     # 欠けたら skip する能力
 
 
 # --------------------------------------------------------------- 各ステップ
-def _prep(ctx):
+def _prep(ctx: Ctx) -> None:
     from recon3d.core.ingest import materialize_imu
     materialize_imu(ctx.paths)
     if ctx.paths.masks is None and not ctx.paths.seg.exists():
@@ -67,7 +105,7 @@ def _prep(ctx):
         generate(ctx.paths, tag="mapany_f130")
 
 
-def _chains(ctx):
+def _chains(ctx: Ctx) -> None:
     """チャンク推論 + 区間別チェーン (既存チャンクはスキップされる)"""
     from recon3d.core.chunking import MODEL_DIRS, run_batch
     model = ctx.get("chunking.model", "pv")
@@ -93,10 +131,13 @@ def _chains(ctx):
         raise SystemExit(f"segments={segments} は使えない: "
                          f"{ctx.caps.reason(need)}")
 
-    common = dict(max_seg=max_seg, segments_source=segments, stride=stride,
-                  manifest_out=manifest_out,
-                  use_idle=ctx.get("chunking.use_idle", True),
-                  model=model, chunk_size=chunk_size)
+    # yaw_fix の再チェーンでも**同じ引数一式**を使う (旧実装は max_seg と
+    # segments しか渡さず、既定条件のチェーンを上書きしていた)
+    common: dict[str, Any] = dict(
+        max_seg=max_seg, segments_source=segments, stride=stride,
+        manifest_out=manifest_out,
+        use_idle=ctx.get("chunking.use_idle", True),
+        model=model, chunk_size=chunk_size)
     manifest = run_batch(ctx.paths, chunks_dir=ctx.chunks_dir,
                          tag_suffix=var, **common)
 
@@ -119,7 +160,8 @@ def _chains(ctx):
     ctx.manifest = manifest
 
 
-def _yaw_fix_rechain(ctx, common, var):
+def _yaw_fix_rechain(ctx: Ctx, common: dict[str, Any],
+                     var: str) -> Manifest:
     """方位ロック撮影のチャンク内回転を直して**同じ条件で**チェーンし直す
 
     旧実装は再チェーンに max_seg と segments しか渡しておらず、
@@ -128,8 +170,8 @@ def _yaw_fix_rechain(ctx, common, var):
     """
     from recon3d.core.chunking import run_batch
     from recon3d.postproc.yaw_fix import fix_chunk
-    src = ctx.paths.results / "pcd" / ctx.chunks_dir
-    out = ctx.paths.results / "pcd" / f"{ctx.chunks_dir}_yawfix"
+    src = ctx.paths.results / "pcd" / ctx.chunks
+    out = ctx.paths.results / "pcd" / f"{ctx.chunks}_yawfix"
     out.mkdir(parents=True, exist_ok=True)
     for c in sorted(src.glob("chunk_*")):
         fixed, _ = fix_chunk(c.name, src, out)
@@ -138,11 +180,11 @@ def _yaw_fix_rechain(ctx, common, var):
     print("[yaw_fix] 済 → チェーンを修正チャンクで再実行")
     ctx.chunks_dir = f"{ctx.chunks_dir}_yawfix"
     ctx.tag_suffix = f"{var}_yawfix"
-    return run_batch(ctx.paths, chunks_dir=ctx.chunks_dir,
+    return run_batch(ctx.paths, chunks_dir=ctx.chunks,
                      tag_suffix=ctx.tag_suffix, **common)
 
 
-def _posegraph(ctx):
+def _posegraph(ctx: Ctx) -> None:
     """島ごとにポーズグラフ+ループ拘束で解き直し、以降のステップの対象を差し替える
 
     逐次連結は誤差を一本道に積むが、全チャンクを同時に解くと解消する
@@ -153,12 +195,12 @@ def _posegraph(ctx):
     import json as _json
 
     from recon3d.core.posegraph import YAW_W, run as pg_run
-    pcd = ctx.paths.results / "pcd" / ctx.chunks_dir
+    pcd = ctx.paths.results / "pcd" / ctx.chunks
     prefix = ctx.get("posegraph.prefix", "pg_")
     yaw_w = ctx.get("posegraph.yaw_w", YAW_W)
     loops = ctx.get("posegraph.loops", True)
     out = []
-    for m in ctx.manifest:
+    for m in ctx.islands:
         tag = prefix + m["tag"]
         cdirs = [pcd / f"chunk_{k:02d}" for k in m["chunks"]]
         try:
@@ -179,22 +221,22 @@ def _posegraph(ctx):
     print(f"[posegraph] {len(out)}島 -> {ctx.paths.bench / name}")
 
 
-def _eval(ctx):
+def _eval(ctx: Ctx) -> None:
     from recon3d.eval.frontend import evaluate
     from recon3d.eval.gt_traj import load_gt
     gt = load_gt(ctx.paths)
-    res = [evaluate(ctx.paths, m["tag"], gt) for m in ctx.manifest]
+    res = [evaluate(ctx.paths, m["tag"], gt) for m in ctx.islands]
     (ctx.paths.bench / "compare.json").write_text(json.dumps(res, indent=1))
 
 
-def _mapany(ctx):
+def _mapany(ctx: Ctx) -> None:
     from recon3d.postproc.mapany_run import run_mapany
-    run_mapany(ctx.paths, ctx.manifest)
+    run_mapany(ctx.paths, ctx.islands)
 
 
-def _interp(ctx):
+def _interp(ctx: Ctx) -> None:
     from recon3d.postproc.interp import interp
-    for m in ctx.manifest:
+    for m in ctx.islands:
         ma = m["tag"].replace("pv", "macond", 1)
         if (ctx.paths.bench / ma / "global_cameras.npz").exists():
             interp(ctx.paths, m["tag"], ma, m["tag"].replace("pv", "maf", 1))
@@ -202,7 +244,7 @@ def _interp(ctx):
             print(f"[interp] {ma} なし -> skip")
 
 
-def _bridge(ctx):
+def _bridge(ctx: Ctx) -> None:
     """橋渡しで島を群れにまとめる。以降のステップは**群れ**を対象にする"""
     from recon3d.core.island_group import (CONSENSUS_OK_M, MODES,
                                              build_groups, group_manifest)
@@ -217,12 +259,12 @@ def _bridge(ctx):
         json.dumps(ctx.manifest, ensure_ascii=False, indent=1))
 
 
-def _anchor(ctx):
+def _anchor(ctx: Ctx) -> None:
     from recon3d.postproc.anchor_run import anchor_islands
-    anchor_islands(ctx.paths, ctx.manifest, jobs=ctx.get("anchor.jobs"))
+    anchor_islands(ctx.paths, ctx.islands, jobs=ctx.get("anchor.jobs"))
 
 
-def _hier(ctx):
+def _hier(ctx: Ctx) -> None:
     """直接アンカーに失敗した**分割サブ島**へ親から移送する保険
 
     親島は `--segments gt` の階区間分割でしか作られない。`--max-seg` の
@@ -230,7 +272,7 @@ def _hier(ctx):
     対象ゼロになるのが正常。
     """
     from recon3d.postproc.hier_anchor import hier_anchor
-    targets = [m for m in ctx.manifest if m.get("parent")]
+    targets = [m for m in ctx.islands if m.get("parent")]
     if not targets:
         print("[hier] parent を持つ島が無い -> 適用対象なし "
               "(--max-seg 分割では親島が作られないので正常)")
@@ -249,11 +291,11 @@ def _hier(ctx):
             print(f"[hier] {m['tag']}: 失敗 ({e})")
 
 
-def _export(ctx):
+def _export(ctx: Ctx) -> None:
     from recon3d.out.export import export
     z_off = {"1F": 0.0, "2F": 2.9, "3F": 5.8}
     islands = []
-    for m in ctx.manifest:
+    for m in ctx.islands:
         for sfx in ("_corners", "_hier", ""):
             if (ctx.paths.backend / f"anchor_{m['tag']}{sfx}.json").exists():
                 islands.append((m["tag"], z_off.get(m["floor"], 0.0), sfx))
@@ -302,7 +344,7 @@ DEFAULT_STEPS = ("prep", "chains", "anchor", "export")
 
 
 # ------------------------------------------------------------------ 依存解決
-def resolve(selected):
+def resolve(selected: Sequence[str]) -> list[str]:
     """選んだステップ -> 前提を補った実行順。未知の名前は SystemExit"""
     bad = [s for s in selected if s not in STEPS]
     if bad:
@@ -326,7 +368,9 @@ def resolve(selected):
     return order
 
 
-def plan(paths, selected, caps=None, strict=True):
+def plan(paths: Paths, selected: Sequence[str],
+         caps: Optional[Caps] = None,
+         strict: bool = True) -> tuple[list[str], dict[str, str]]:
     """実行順と、能力不足で skip するステップの理由を返す
 
     明示的に選ばれたステップが能力不足なら**止める** (strict=True)。自動で
@@ -354,7 +398,8 @@ def plan(paths, selected, caps=None, strict=True):
     return run, skip
 
 
-def execute(paths, selected, opt=None):
+def execute(paths: Paths, selected: Sequence[str],
+            opt: Optional[Opt] = None) -> Ctx:
     """前提を補って順に実行し、Ctx を返す"""
     from recon3d.core import caps as caps_mod
     caps = caps_mod.detect(paths)
@@ -370,12 +415,12 @@ def execute(paths, selected, opt=None):
         STEPS[s].run(ctx)
         if s == "chains" and ctx.get("islands"):
             keep = set(ctx.get("islands"))
-            ctx.manifest = [m for m in ctx.manifest if m["tag"] in keep]
+            ctx.manifest = [m for m in ctx.islands if m["tag"] in keep]
     print("pipeline done")
     return ctx
 
 
-def describe():
+def describe() -> list[str]:
     """ステップの一覧 (name / doc / 依存 / 必要な能力) を行のリストで返す"""
     w = max(len(s) for s in STEPS)
     out = []

@@ -25,20 +25,26 @@
   pipeline run --session 0912 --segments imu --post anchor,hier,export
       → マニフェスト読み込み時に自動適用される
 """
+from __future__ import annotations
+
 import argparse
 import json
+from typing import Any
+
+from recon3d.paths import Paths
+from recon3d.types import Island, Manifest
 
 
 ASSIGN_NAME = "floor_assign.json"
 
 
-def floor_names(paths):
+def floor_names(paths: Paths) -> list[str]:
     """図面がある階を下から順に
 
     B1F は地下なので負、RF/PH のように数字を持たない階名は末尾に送る
     (int() 決め打ちだと ValueError で階の列挙ごと落ちていた)。
     """
-    def key(s):
+    def key(s: str) -> tuple[int, int, str]:
         d = "".join(c for c in s if c.isdigit())
         if not d:
             return (1, 0, s)        # 数字なし (RF, PH, ...) は最後
@@ -48,13 +54,13 @@ def floor_names(paths):
     return sorted((p.stem for p in paths.floors.glob("*.jpg")), key=key)
 
 
-def load(paths, name=ASSIGN_NAME):
+def load(paths: Paths, name: str = ASSIGN_NAME) -> dict[str, Any] | None:
     """割当ファイルを読む。無ければ None"""
     p = paths.backend / name
     return json.loads(p.read_text()) if p.exists() else None
 
 
-def floor_of(info, assign):
+def floor_of(info: Island, assign: dict[str, Any] | None) -> str | None:
     """島1本の階を決める。islands指定が優先、無ければ ranges の多数決"""
     if not assign:
         return info.get("floor")
@@ -69,7 +75,8 @@ def floor_of(info, assign):
     return best
 
 
-def apply(paths, manifest, name=ASSIGN_NAME, quiet=False):
+def apply(paths: Paths, manifest: Manifest, name: str = ASSIGN_NAME,
+          quiet: bool = False) -> Manifest:
     """マニフェストに階を流し込む (割当が無ければ素通し)"""
     assign = load(paths, name)
     if not assign:
@@ -85,7 +92,8 @@ def apply(paths, manifest, name=ASSIGN_NAME, quiet=False):
     return manifest
 
 
-def template(paths, manifest, name=ASSIGN_NAME):
+def template(paths: Paths, manifest: Manifest,
+             name: str = ASSIGN_NAME) -> dict[str, Any]:
     """現在の島を並べた雛形を書く (floor_seq があれば初期値に使う)"""
     seq = paths.imu / "floor_seq.json"
     hint = {}
@@ -110,7 +118,8 @@ def template(paths, manifest, name=ASSIGN_NAME):
     return out
 
 
-def check(paths, manifest, name=ASSIGN_NAME):
+def check(paths: Paths, manifest: Manifest,
+          name: str = ASSIGN_NAME) -> bool:
     """割当の妥当性を確認する"""
     assign = load(paths, name)
     if not assign:
@@ -131,7 +140,7 @@ def check(paths, manifest, name=ASSIGN_NAME):
     return ok
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default="pv_manifest.json")
     ap.add_argument("--name", default=ASSIGN_NAME)

@@ -11,6 +11,8 @@
       --parent pv0912_2F --floor 2F --subs pv0912_2F1 pv0912_2F2
 出力: backend/anchor_<sub>_hier.json (out.export互換) + hier_anchor_<sub>.json (frame→px)
 """
+from __future__ import annotations
+
 import argparse
 import json
 import math
@@ -19,14 +21,16 @@ import numpy as np
 
 from recon3d.core.plan_grid import PlanGrid
 from recon3d.postproc.anchor import prepare_island
+from recon3d.paths import Paths
 from recon3d.postproc.plan_icp import (cells_to_px, icp_to_walls,
-                                         segs_to_cells, transform_pts,
-                                         wall_segments_px)
+                                       segs_to_cells, transform_pts,
+                                       wall_segments_px)
 
 MIN_SHARED = 6     # 親と共有する最少フレーム数
 
 
-def hier_anchor(paths, sub_tag, floor, parent_track, mpu=None):
+def hier_anchor(paths: Paths, sub_tag: str, floor: str, parent_track,
+                mpu: float | None = None) -> tuple[dict, float]:
     """親の軌跡(frame→図面px)からサブ島のアンカーを解く。返り値: (track, resid)"""
     d = prepare_island(paths, sub_tag, mpu=mpu)
     names = [str(n) for n in d["names"]]
@@ -84,7 +88,7 @@ def hier_anchor(paths, sub_tag, floor, parent_track, mpu=None):
     return track, resid
 
 
-def _eval_vs_gt(paths, track, floor):
+def _eval_vs_gt(paths: Paths, track, floor: str) -> dict | None:
     from recon3d.eval.gt_traj import mm_per_px, load_gt
     try:
         gt = load_gt(paths)
@@ -102,7 +106,7 @@ def _eval_vs_gt(paths, track, floor):
             "n": len(e)}
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--parent", required=True,
                     help="親島タグ (corner_anchor_<tag>.json を軌跡源に使う)")

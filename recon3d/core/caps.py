@@ -7,17 +7,22 @@
 
   python main.py inspect input=/data/reconstruction
 """
+from __future__ import annotations
+
 import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from recon3d.paths import Paths
+from recon3d.types import PathLike, ScaleSource
 
 
 CGROUP_V2 = Path("/sys/fs/cgroup/cpu.max")
 CGROUP_V1 = Path("/sys/fs/cgroup/cpu")
 
 
-def cpus(root="/"):
+def cpus(root: PathLike = "/") -> int:
     """このプロセスが実際に使える CPU 数
 
     **`os.cpu_count()` を直接使ってはいけない。** ノードのコア数を返すので、
@@ -51,7 +56,7 @@ def cpus(root="/"):
     return os.cpu_count() or 4
 
 
-def _quota(quota, period):
+def _quota(quota: str | float, period: str | float) -> int | None:
     """quota/period -> CPU数 (切り上げ)。無制限・不正なら None"""
     try:
         q, p = float(quota), float(period or 100000)
@@ -79,22 +84,23 @@ DESC = {
 
 @dataclass
 class Caps:
-    have: set = field(default_factory=set)
-    why: dict = field(default_factory=dict)   # 能力名 -> 欠けている理由
+    have: set[str] = field(default_factory=set)
+    # 能力名 -> 欠けている理由 (そのまま人へ見せる文面)
+    why: dict[str, str] = field(default_factory=dict)
 
-    def __contains__(self, name):
+    def __contains__(self, name: str) -> bool:
         return name in self.have
 
-    def reason(self, name):
+    def reason(self, name: str) -> str:
         if name in self.why:
             return self.why[name]
         return f"{DESC.get(name) or name} が無い"
 
-    def as_dict(self):
+    def as_dict(self) -> dict[str, bool]:
         return {k: (k in self.have) for k in DESC}
 
 
-def _labelme_floors(zumen_dir):
+def _labelme_floors(zumen_dir: Path) -> list[str]:
     """labelme として読める図面JSONの階名 (壁が1本も無いものは数えない)"""
     out = []
     if not zumen_dir.is_dir():
@@ -112,8 +118,8 @@ def _labelme_floors(zumen_dir):
     return out
 
 
-def detect(paths):
-    """いまのセッションの能力を判定する"""
+def detect(paths: Paths) -> Caps:
+    """この入力で何ができるかを判定する"""
     c = Caps()
 
     n = len(paths.frame_indices)
@@ -191,7 +197,7 @@ def detect(paths):
     return c
 
 
-def scale_prior_source(paths):
+def scale_prior_source(paths: Paths) -> ScaleSource:
     """アンカーが実際に使う m_per_unit の供給源 ("calib"/"mapany"/"slab")
 
     優先順は postproc/scale_prior.m_per_unit と同じ:
@@ -204,13 +210,13 @@ def scale_prior_source(paths):
     return "slab"
 
 
-def _has_gt(paths):
+def _has_gt(paths: Paths) -> bool:
     if (paths.root / "trajectory_points.csv").exists():
         return True
     return (paths.backend / "gt_trajectory.csv").exists()
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     """入力の能力 (何が揃っていて何が足りないか) を表示する"""
     import argparse
     argparse.ArgumentParser(description=__doc__).parse_args(argv)

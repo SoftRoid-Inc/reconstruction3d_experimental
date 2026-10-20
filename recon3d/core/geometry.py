@@ -1,14 +1,18 @@
 """共通幾何: Sim(3)・重力整列・ヨーの頑健統計 (全系統共通)"""
+from __future__ import annotations
+
 import math
 
 import numpy as np
+
+from recon3d.types import F64, Mat3, Points3, Poses, Scalar, Sim3, Vec3
 
 CORE_DEG = 5.0    # 頑健ヨー中央値の再計算で除外する逸脱 (deg)
 
 
 # ---------------------------------------------------------------- Sim(3)
 
-def sim3_umeyama(src, dst):
+def sim3_umeyama(src: Points3, dst: Points3) -> Sim3:
     """dst ≈ s R src + t (3D)"""
     mu_s, mu_d = src.mean(axis=0), dst.mean(axis=0)
     sc, dc = src - mu_s, dst - mu_d
@@ -24,12 +28,13 @@ def sim3_umeyama(src, dst):
     return s, R, t
 
 
-def apply(T, pts):
+def apply(T: Sim3, pts: Points3) -> Points3:
+    """点列に Sim(3) を掛ける"""
     s, R, t = T
     return (s * (pts @ R.T)) + t
 
 
-def compose(T2, T1):
+def compose(T2: Sim3, T1: Sim3) -> Sim3:
     """T2∘T1 (先にT1)"""
     s1, R1, t1 = T1
     s2, R2, t2 = T2
@@ -38,7 +43,7 @@ def compose(T2, T1):
 
 # ---------------------------------------------------------------- 重力整列
 
-def rotation_to_y(up):
+def rotation_to_y(up: Vec3) -> Mat3:
     """ベクトルupを+yへ回す回転行列 (Rodrigues)"""
     up = up / np.linalg.norm(up)
     axis = np.cross(up, [0, 1, 0])
@@ -51,7 +56,7 @@ def rotation_to_y(up):
     return np.eye(3) + s * K + (1 - c) * K @ K
 
 
-def gravity_from_cameras(poses):
+def gravity_from_cameras(poses: Poses) -> tuple[str, Vec3]:
     """カメラup方向の中央値から重力(world up)を推定する
 
     ローカル点群で床が y<0 にあるため、カメラ座標の+yが上。
@@ -62,21 +67,21 @@ def gravity_from_cameras(poses):
         "cam2world": poses[:, :3, 1],          # R[:,1] = カメラy軸のworld表現
         "world2cam": poses[:, 1, :3],          # R^T[:,1]
     }
-    best = None
+    scored: list[tuple[float, str, Vec3]] = []
     for conv, ups in cands.items():
         u = ups / np.linalg.norm(ups, axis=1, keepdims=True)
         med = np.median(u, axis=0)
         med /= np.linalg.norm(med)
-        spread = np.degrees(np.arccos(np.clip(u @ med, -1, 1))).mean()
+        spread = float(np.degrees(np.arccos(np.clip(u @ med, -1, 1))).mean())
         print(f"  up-convention {conv}: spread {spread:.1f} deg, "
               f"up={np.round(med, 3)}")
-        if best is None or spread < best[2]:
-            best = (conv, med, spread)
-    conv, up, _ = best
+        scored.append((spread, conv, med))
+    _, conv, up = min(scored, key=lambda x: x[0])
     return conv, up
 
 
-def camera_centers(poses, conv):
+def camera_centers(poses: Poses, conv: str) -> Points3:
+    """姿勢の列 -> カメラ中心の列 (規約は gravity_from_cameras の判定)"""
     if conv == "cam2world":
         return poses[:, :3, 3]
     return -np.einsum("nij,nj->ni", poses[:, :3, :3].transpose(0, 2, 1),
@@ -85,13 +90,14 @@ def camera_centers(poses, conv):
 
 # ---------------------------------------------------------------- ヨー統計
 
-def rot_y(th):
+def rot_y(th: Scalar) -> Mat3:
+    """重力軸(y)まわりの回転"""
     c, s = math.cos(th), math.sin(th)
     return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
 
 
-def robust_yaw_median(phi):
-    """円周中央値 (逸脱大フレームを除外して2回反復)"""
+def robust_yaw_median(phi: F64) -> tuple[float, F64]:
+    """円周中央値と各要素の逸脱[deg] (逸脱大を除外して2回反復)"""
     c = np.exp(1j * phi)
     med = math.atan2(np.median(np.imag(c)), np.median(np.real(c)))
     for _ in range(2):

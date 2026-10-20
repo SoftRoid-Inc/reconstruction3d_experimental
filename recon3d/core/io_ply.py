@@ -1,8 +1,12 @@
 """バイナリPLY (x,y,z float32 + r,g,b uint8) の読み書き (全系統共通)"""
+from __future__ import annotations
+
 import numpy as np
 
+from recon3d.types import PathLike, Points3, Rgb
 
-def write_ply(path, xyz, rgb):
+
+def write_ply(path: PathLike, xyz: Points3, rgb: Rgb) -> None:
     header = ("ply\nformat binary_little_endian 1.0\n"
               f"element vertex {len(xyz)}\n"
               "property float x\nproperty float y\nproperty float z\n"
@@ -17,7 +21,7 @@ def write_ply(path, xyz, rgb):
         f.write(data.tobytes())
 
 
-def read_ply_xyzrgb(path):
+def read_ply_xyzrgb(path: PathLike) -> tuple[Points3, Rgb]:
     """PanoVGGT inference.py が書く形式のバイナリPLYを読む"""
     with open(path, "rb") as f:
         header = b""

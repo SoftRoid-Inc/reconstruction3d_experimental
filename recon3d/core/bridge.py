@@ -21,8 +21,11 @@ stride 2〜4 なので条件が違うが、成立するかは実測で確かめ�
   python main.py tool bridge --input /data/x --list
   python main.py tool bridge --input /data/x --junction 237:278 --mode span
 """
+from __future__ import annotations
+
 import argparse
 import json
+from typing import Sequence
 
 import numpy as np
 
@@ -30,20 +33,26 @@ from recon3d.core.chunking import CHUNK_SIZE, imu_segments
 from recon3d.core.floor_assign import apply as apply_floor
 from recon3d.core.geometry import apply, compose, sim3_umeyama
 from recon3d.core.panovggt import run_panovggt
+from recon3d.paths import Paths
+from recon3d.types import Island, Manifest, Mat3, Points3, Sim3, Vec3
 
 
 
-def n_frames(paths):
+def n_frames(paths: Paths) -> int:
     return len(sorted(paths.images.glob("frame_number_*.jpg")))
 
 
-def junctions(paths, segs=None):
+def junctions(paths: Paths,
+              segs: Sequence[tuple] | None = None
+              ) -> list[tuple[int, int]]:
     """島の切れ目 [(a_end, b_start)]。segs は imu_segments の出力"""
     segs = segs if segs is not None else imu_segments(paths, n_frames(paths))
     return [(segs[i][2], segs[i + 1][1]) for i in range(len(segs) - 1)]
 
 
-def bridge_frames(paths, a_end, b_start, mode="span", size=CHUNK_SIZE):
+def bridge_frames(paths: Paths, a_end: int, b_start: int,
+                  mode: str = "span",
+                  size: int = CHUNK_SIZE) -> list[int]:
     """橋渡しチャンクに使うフレーム番号列 (昇順、重複なし)
 
     ends系の stride を上げると、同じ枚数でも**基線が伸びて姿勢が決まりやすい**。
@@ -71,7 +80,8 @@ def bridge_frames(paths, a_end, b_start, mode="span", size=CHUNK_SIZE):
     return sorted({f for f in fr if 0 <= f < n_frames(paths)})
 
 
-def chain_end_frames(paths, tag, side, n=8, stride=2):
+def chain_end_frames(paths: Paths, tag: str, side: str, n: int = 8,
+                     stride: int = 2) -> list[int]:
     """島チェーンの端から n 枚 (stride刻み、昇順)
 
     橋は**2本のチェーンを繋ぐ**ものなので、フレームはチェーンに実在する
@@ -85,7 +95,7 @@ def chain_end_frames(paths, tag, side, n=8, stride=2):
     return sorted(sel)
 
 
-def _chain_poses(paths, tag):
+def _chain_poses(paths: Paths, tag: str) -> dict[int, Vec3]:
     """島チェーンの {frame: カメラ中心(3,)}"""
     d = paths.bench / tag
     cam = np.load(d / "global_cameras.npz")
@@ -94,7 +104,9 @@ def _chain_poses(paths, tag):
     return {int(n.replace("frame_", "")): pos[i] for i, n in enumerate(names)}
 
 
-def fit_side(bridge_pos, chain_pos, frames):
+def fit_side(bridge_pos: dict[int, Vec3], chain_pos: dict[int, Vec3],
+             frames: Sequence[int]
+             ) -> tuple[float, Mat3, Vec3, float, int] | None:
     """橋の姿勢を島チェーンにSim(3)フィット。(s, R, t, 残差m, 使用数)"""
     common = [f for f in frames if f in chain_pos and f in bridge_pos]
     if len(common) < 4:
@@ -107,7 +119,8 @@ def fit_side(bridge_pos, chain_pos, frames):
     return s, R, t, resid, len(common)
 
 
-def run_frames(paths, frames, name, use_mask=True):
+def run_frames(paths: Paths, frames: Sequence[int], name: str,
+               use_mask: bool = True) -> dict[int, Vec3]:
     """指定フレーム集合を1チャンクとして推論し {frame: カメラ中心} を返す"""
     out = paths.pcd / "bridges" / f"{paths.name}_{name}"
     if not (out / "cameras.npz").exists():
@@ -122,7 +135,9 @@ def run_frames(paths, frames, name, use_mask=True):
     return {int(n.replace("frame_", "")): pos[i] for i, n in enumerate(names)}
 
 
-def run_chain_bridge(paths, tag_a, tag_b, n=8, stride=2, use_mask=True):
+def run_chain_bridge(paths: Paths, tag_a: str, tag_b: str, n: int = 8,
+                     stride: int = 2, use_mask: bool = True
+                     ) -> tuple[dict[int, Vec3], list[int], list[int]]:
     """2つの島チェーンの端どうしを1チャンクで繋ぐ (推奨経路)"""
     fa = chain_end_frames(paths, tag_a, "a", n, stride)
     fb = chain_end_frames(paths, tag_b, "b", n, stride)
@@ -130,7 +145,8 @@ def run_chain_bridge(paths, tag_a, tag_b, n=8, stride=2, use_mask=True):
     return run_frames(paths, sorted(set(fa + fb)), name, use_mask), fa, fb
 
 
-def run_bridge(paths, a_end, b_start, mode="span", use_mask=True):
+def run_bridge(paths: Paths, a_end: int, b_start: int, mode: str = "span",
+               use_mask: bool = True) -> dict[int, Vec3]:
     """橋渡しチャンクを推論して {frame: カメラ中心} を返す (既存なら再利用)"""
     frames = bridge_frames(paths, a_end, b_start, mode)
     out = paths.pcd / "bridges" / f"{paths.name}_{a_end}_{b_start}_{mode}"
@@ -153,7 +169,7 @@ def run_bridge(paths, a_end, b_start, mode="span", use_mask=True):
 MANIFEST_NAME = "pv_manifest.json"
 
 
-def set_manifest_name(name):
+def set_manifest_name(name: str | None) -> str:
     """以降 manifest_islands() が読むファイルを切り替える (None なら既定のまま)"""
     global MANIFEST_NAME
     if name:
@@ -161,14 +177,15 @@ def set_manifest_name(name):
     return MANIFEST_NAME
 
 
-def manifest_islands(paths, name=None):
+def manifest_islands(paths: Paths, name: str | None = None) -> Manifest:
     """階が割り当たった島を開始フレーム順に返す"""
     p = paths.bench / (name or MANIFEST_NAME)
     man = apply_floor(paths, json.loads(p.read_text()), quiet=True)
     return sorted([m for m in man if m.get("floor")], key=lambda m: m["a"])
 
 
-def islands_at(paths, a_end, b_start):
+def islands_at(paths: Paths, a_end: int, b_start: int
+               ) -> tuple[Island | None, Island | None]:
     """切れ目の両側の島タグ (A側=終端が a_end 寄り / B側=始端が b_start 寄り)"""
     man = manifest_islands(paths)
     a = [m for m in man if m["b"] <= a_end + 2]
@@ -178,7 +195,7 @@ def islands_at(paths, a_end, b_start):
     return max(a, key=lambda m: m["b"]), min(b, key=lambda m: m["a"])
 
 
-def junction_kind(paths, a_end, b_start):
+def junction_kind(paths: Paths, a_end: int, b_start: int) -> str:
     """切れ目の種類を返す ("階段" / "静止" / "分割" / "不明")
 
     島は①IMUの階段イベント ②静止 (ZUPT) ③--max-seg の等分割 で切れる。
@@ -202,13 +219,14 @@ def junction_kind(paths, a_end, b_start):
     return "不明"
 
 
-def bridge_transform(paths, a_end, b_start, mode):
+def bridge_transform(paths: Paths, a_end: int, b_start: int, mode: str
+                     ) -> tuple[Sim3 | None, tuple[str, str] | None]:
     """島Bゲージ → 島Aゲージ の Sim(3)。(T, タグ対)。失敗時は (None, None)
 
     橋を鎖状に合成して「群れ」を作るために、位置でなく変換を返す。
     """
     ma, mb = islands_at(paths, a_end, b_start)
-    if ma is None:
+    if ma is None or mb is None:
         return None, None
     ca, cb = _chain_poses(paths, ma["tag"]), _chain_poses(paths, mb["tag"])
     if mode.startswith("n") and "s" in mode:
@@ -229,10 +247,11 @@ def bridge_transform(paths, a_end, b_start, mode):
     return compose((sa, Ra, ta), inv), (ma["tag"], mb["tag"])
 
 
-def transported(paths, a_end, b_start, mode):
+def transported(paths: Paths, a_end: int, b_start: int, mode: str
+                ) -> tuple[Points3 | None, tuple[str, str] | None]:
     """橋で島Bを島Aの座標系へ運んだ位置 (GT不要)。(位置(N,3), タグ対)"""
     ma, mb = islands_at(paths, a_end, b_start)
-    if ma is None:
+    if ma is None or mb is None:
         return None, None
     ca, cb = _chain_poses(paths, ma["tag"]), _chain_poses(paths, mb["tag"])
     if mode.startswith("n") and "s" in mode:
@@ -254,7 +273,8 @@ def transported(paths, a_end, b_start, mode):
     return apply((sa, Ra, ta), apply(inv, kb)), (ma["tag"], mb["tag"])
 
 
-def consensus(paths, a_end, b_start, modes, metric=True):
+def consensus(paths: Paths, a_end: int, b_start: int,
+              modes: Sequence[str], metric: bool = True) -> float | None:
     """方式間で運び先がどれだけ一致するか。GTを使わない採否判定の候補
 
     **metric=True でメートルに正規化する**。島ゲージの尺度は物件で大きく違い
@@ -292,7 +312,7 @@ def consensus(paths, a_end, b_start, modes, metric=True):
 
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", action="store_true", help="切れ目を列挙して終了")
     ap.add_argument("--junction", help="a_end:b_start (省略時は全切れ目)")

@@ -12,21 +12,27 @@
 子プロセスも立てない。同一プロセスから**別の**データセットを回したい場合も
 `Paths` を作り直すだけでよい。
 """
+from __future__ import annotations
+
 from dataclasses import dataclass, field
+from typing import Any, Sequence
 
 from recon3d.paths import from_input
+from recon3d.types import PathLike
 
 
 @dataclass
 class RunResult:
-    root: str
-    results_dir: str
-    steps: list = field(default_factory=list)
-    skipped: dict = field(default_factory=dict)   # 能力不足で飛ばしたステップと理由
-    islands: list = field(default_factory=list)
+    root: str                    # 入力ディレクトリ
+    results_dir: str             # <root>/results
+    steps: list[str] = field(default_factory=list)      # 実際に走らせた指定
+    # 能力不足で飛ばしたステップと理由 (ステップ名 -> 理由)
+    skipped: dict[str, str] = field(default_factory=dict)
+    islands: list[str] = field(default_factory=list)    # 最終の島/群れタグ
 
 
-def run(input_dir, steps=None, **opt) -> RunResult:
+def run(input_dir: PathLike, steps: Sequence[str] | None = None,
+        **opt: Any) -> RunResult:
     """ステップを実行する。失敗は例外のまま伝播させる
 
     能力不足で実行できないステップがあれば `steps.plan` が `SystemExit` を上げる
@@ -42,10 +48,13 @@ def run(input_dir, steps=None, **opt) -> RunResult:
         islands=[m["tag"] for m in (ctx.manifest or [])])
 
 
-def plan(input_dir, steps=None, strict=True):
+def plan(input_dir: PathLike, steps: Sequence[str] | None = None,
+         strict: bool = True) -> tuple[list[str], dict[str, str]]:
     """実行せずに「何が走って何がskipされるか」を返す
 
     `strict=False` は点検用 — 能力不足で止めずに skip 扱いで報告する。
+
+    返り値は (実行順, {skipしたステップ: 理由})。
     """
     from recon3d.steps import DEFAULT_STEPS
     from recon3d.steps import plan as _plan

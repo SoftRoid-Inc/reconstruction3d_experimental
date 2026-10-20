@@ -11,6 +11,12 @@ world合成して points.ply を作り直す。修正不要チャンクはsymlin
 使い方: python main.py tool yaw_fix --input /data/x [--chunks 0,1,2,3,4]
 出力: results/pcd/chunks_yawfix/chunk_XX/
 """
+from __future__ import annotations
+
+from pathlib import Path
+
+from recon3d.paths import Paths
+from recon3d.types import F64, Mat3, Poses
 import argparse
 import json
 import math
@@ -32,7 +38,7 @@ DROP_DEG = 30.0   # これ超はポーズ全壊とみなし位置も信頼しな
 
 
 
-def chunk_yaw(poses):
+def chunk_yaw(poses: Poses) -> tuple[F64, Mat3]:
     """重力整列後のヨー((row,col)=(−z,x)規約) と 重力回転Rg"""
     _, up = gravity_from_cameras(poses)
     Rg = rotation_to_y(up / np.linalg.norm(up))
@@ -41,7 +47,8 @@ def chunk_yaw(poses):
     return phi, Rg
 
 
-def fix_chunk(name, src_root, out_root):
+def fix_chunk(name: str, src_root: Path,
+              out_root: Path) -> tuple[bool, dict[str, float]]:
     """1チャンクを修正して out_root/name に書く。修正不要ならFalse"""
     src = src_root / name
     cams = np.load(src / "cameras.npz")
@@ -99,7 +106,7 @@ def fix_chunk(name, src_root, out_root):
     return True, untrusted
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--chunks", default="0,1,2,3,4",
                     help="'0,1,2' か 'all' (srcの全chunk_*)")

@@ -14,15 +14,20 @@ IMU派生物 (transitions.json / idle_spans.json など) は別パイプライ�
 そこで取り込んだファイル名を `_materialized.json` に記録し、毎回それを
 消してから張り直す。
 """
+from __future__ import annotations
+
 import json
 import shutil
+from pathlib import Path
+
+from recon3d.paths import Paths
 
 
 LEDGER = "_materialized.json"
 PATTERNS = ("*.json", "*.npz")
 
 
-def source_dir(paths):
+def source_dir(paths: Paths) -> Path | None:
     """入力側の imu/ (無ければ None)
 
     入力契約では images/ と並んで imu/ がある。出力側の `paths.imu` とは
@@ -34,7 +39,7 @@ def source_dir(paths):
     return None
 
 
-def materialize_imu(paths, verbose=True):
+def materialize_imu(paths: Paths, verbose: bool = True) -> list[str]:
     """入力の imu/* を paths.imu へ取り込む。取り込んだ名前のリストを返す"""
     src = source_dir(paths)
     if src is None:
@@ -48,7 +53,7 @@ def materialize_imu(paths, verbose=True):
                 (paths.imu / name).unlink(missing_ok=True)
         except Exception as e:                      # noqa: BLE001
             print(f"[ingest] {LEDGER} を読めない ({e}) -> 全部張り直す")
-    names = []
+    names: list[str] = []
     for pat in PATTERNS:
         for p in sorted(src.glob(pat)):
             if p.name == LEDGER:
@@ -62,7 +67,7 @@ def materialize_imu(paths, verbose=True):
     return names
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     """入力の imu/ を results/imu/ へ台帳つきで取り込む"""
     import argparse
     argparse.ArgumentParser(description=__doc__).parse_args(argv)

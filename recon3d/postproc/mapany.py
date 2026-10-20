@@ -15,6 +15,8 @@ MapAnything (facebookresearch/map-anything, Apacheモデル) は全ビュー一�
   python main.py tool mapany --input /data/x infer --tag mapany0428_ALL --stride 2
   python main.py tool mapany --input /data/x baseline --tag cmbase0616_1F --floor 1F
 """
+from __future__ import annotations
+
 import argparse
 import json
 import math
@@ -22,6 +24,8 @@ import math
 import numpy as np
 
 from recon3d.core.io_ply import write_ply
+from recon3d.paths import Paths
+from recon3d.types import Mat3
 
 CROP_TAG = "mapany_f130"
 FOV_DEG = 130.0
@@ -30,7 +34,7 @@ YAW_DEG = 0.0
 PLY_STRIDE = 6          # 点群出力の画素間引き
 
 
-def crop2rig(yaw_deg=YAW_DEG, pitch_deg=PITCH_DEG):
+def crop2rig(yaw_deg=YAW_DEG, pitch_deg=PITCH_DEG) -> Mat3:
     """クロップカメラ→equirectリグの回転 (OpenCV系: x右/y下/z前)
 
     py360convert.e2p(u_deg=yaw, v_deg=pitch) は方位yaw・仰角pitchを向く
@@ -39,14 +43,15 @@ def crop2rig(yaw_deg=YAW_DEG, pitch_deg=PITCH_DEG):
     u, v = math.radians(yaw_deg), math.radians(pitch_deg)
     ry = np.array([[math.cos(u), 0, math.sin(u)],
                    [0, 1, 0],
-                   [-math.sin(u), 0, math.cos(u)]])
+                   [-math.sin(u), 0, math.cos(u)]], dtype=float)
     rx = np.array([[1, 0, 0],
                    [0, math.cos(v), -math.sin(v)],
-                   [0, math.sin(v), math.cos(v)]])
-    return ry @ rx
+                   [0, math.sin(v), math.cos(v)]], dtype=float)
+    return np.asarray(ry @ rx, dtype=float)
 
 
-def select_frames(paths, floor=None, stride=1, frange=None):
+def select_frames(paths: Paths, floor: str | None = None, stride: int = 1,
+                  frange=None) -> tuple[list[int], dict[int, str]]:
     """対象フレーム番号列。--floor指定時はGTの階割当で絞る (階段区間を除外)。
     frange=(a,b) でフレーム範囲も絞る (同一階の複数訪問区間の分離用)
 
@@ -67,7 +72,8 @@ def select_frames(paths, floor=None, stride=1, frange=None):
 
 
 
-def save_bench(paths, tag, names, positions, poses, pts, rgb, log):
+def save_bench(paths: Paths, tag: str, names, positions, poses,
+               pts, rgb, log) -> None:
     out = paths.bench / tag
     out.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(out / "global_cameras.npz",
@@ -79,11 +85,12 @@ def save_bench(paths, tag, names, positions, poses, pts, rgb, log):
           + (f", {len(pts):,} pts" if pts is not None else "") + ")")
 
 
-def run_infer(paths, args):
-    import torch
+def run_infer(paths: Paths, args) -> None:
+    # mapanything コンテナ内にしか無い (ホストでは import できないのが正常)
+    import torch  # type: ignore[import-not-found]
     from PIL import Image
-    from mapanything.models import MapAnything
-    from mapanything.utils.image import preprocess_inputs
+    from mapanything.models import MapAnything  # type: ignore[import-not-found]
+    from mapanything.utils.image import preprocess_inputs  # type: ignore[import-not-found]
 
     frames, fr2file = select_frames(paths, args.floor, args.stride, _frange(args))
     yaws = [float(y) for y in args.yaws.split(",")]
@@ -107,7 +114,8 @@ def run_infer(paths, args):
         for y in yaws:
             im = Image.open(crop_dirs[y] / fr2file[fr])
             if args.res and args.res != im.size[0]:
-                im = im.resize((args.res, args.res), Image.LANCZOS)
+                im = im.resize((args.res, args.res),
+                               Image.Resampling.LANCZOS)
             img = np.asarray(im)
             s = img.shape[0]
             f = (s / 2) / math.tan(math.radians(FOV_DEG) / 2)
@@ -176,7 +184,7 @@ def run_infer(paths, args):
         print(f"-> {out} ({len(local)} frames, rig-frame metric xyz+rgb)")
 
 
-def run_baseline(paths, args):
+def run_baseline(paths: Paths, args) -> None:
     """社内COLMAP coarse (equirect) の軌跡を同じ契約で書き出す (比較用)"""
     from recon3d.postproc.colmap_prior import colmap_centers
 
@@ -199,11 +207,11 @@ def run_baseline(paths, args):
                None, None, log)
 
 
-def _frange(args):
+def _frange(args) -> tuple[int, ...] | None:
     return tuple(int(v) for v in args.frames.split(":")) if args.frames else None
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("infer", "baseline"):
@@ -231,5 +239,5 @@ def main(paths, argv=None):
             sp.add_argument("--nc", action="store_true",
                             help="非商用フルモデル (facebook/map-anything) を使う")
     args = ap.parse_args(argv)
-    (run_infer if args.cmd == "infer" else run_baseline)(args)
+    (run_infer if args.cmd == "infer" else run_baseline)(paths, args)
 

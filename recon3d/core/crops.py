@@ -9,18 +9,23 @@ frame番号へ引き戻せるようにする。
           [--fov 120] [--yaw 0] [--size 1100]
 出力: results/vidmap/<sess>/frames/ (連番jpg) + name_map.json
 """
+from __future__ import annotations
+
 import argparse
 import json
 
 import numpy as np
 
 from recon3d.constants import GROUP_IDS
+from recon3d.paths import Paths
+from recon3d.types import BoolArr
 from PIL import Image
 from scipy import ndimage
 
 
 
-def load_person_mask(paths, frame_name, dilate=6):
+def load_person_mask(paths: Paths, frame_name: str,
+                     dilate: int = 6) -> BoolArr | None:
     """personのequirect boolマスク (セグ解像度 1024x2048 のまま)。無ければNone
 
     frame_name は 'frame_000123' 形式。gs_prep とも共用。
@@ -35,11 +40,12 @@ def load_person_mask(paths, frame_name, dilate=6):
                if paths.masks else None)
         if jpg is None or not jpg.exists():
             return None
-        m = Image.open(jpg).convert("L").resize((2048, 1024), Image.BILINEAR)
+        m = Image.open(jpg).convert("L").resize(
+            (2048, 1024), Image.Resampling.BILINEAR)
         person = np.asarray(m) < 128
     if dilate:
         person = ndimage.binary_dilation(person, iterations=dilate)
-    return person
+    return np.asarray(person, dtype=bool)
 
 
 def generate(paths, fov=130.0, yaw=0.0, pitch=10.0, size=518,
@@ -83,7 +89,7 @@ def generate(paths, fov=130.0, yaw=0.0, pitch=10.0, size=518,
     return out
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fov", type=float, default=130.0)
     ap.add_argument("--yaw", type=float, default=0.0,

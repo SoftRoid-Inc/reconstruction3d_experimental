@@ -13,8 +13,12 @@
 使い方: python main.py tool corners --input /data/x            # 図面+島の検出と検証画像
 出力: results/backend/corners_plan_{1F,2F}.jpg / corners_island_<tag>.jpg
 """
+from __future__ import annotations
+
 import json
 import math
+from pathlib import Path
+from typing import Any, Sequence, TypeAlias
 
 import matplotlib
 
@@ -23,7 +27,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 
+from recon3d.paths import Paths
 from recon3d.postproc.plan_icp import wall_segments_px
+from recon3d.types import BoolArr, F64, Points2, Scalar
+
+#: コーナー1個。図面側 {x,y,kind,quad} / 密度側 {r,c,kind,quad,arms}
+Corner: TypeAlias = "dict[str, Any]"
 
 PLAN_TOL_PX = 16          # 図面: 端点↔線分の許容距離 (壁厚相当 ~19cm)
 DENS_THR = 0.35           # 密度: 強壁セルの閾値 (家具は高さスパンが浅く落ちる)
@@ -35,7 +44,7 @@ DENS_BAND = 2             # 密度: 壁線の太さ許容 (±セル)
 
 # ---------------------------------------------------------------- 図面側
 
-def plan_corners(paths, floor):
+def plan_corners(paths: Paths, floor: str) -> list[Corner]:
     """GT壁中心線分から交点を列挙。返り値: list of dict
     {x, y, kind: 'L'|'T', quad: (sx, sy)}  (sx,sy = 壁が伸びる向きの符号)"""
     segs = wall_segments_px(paths, floor)
@@ -67,7 +76,7 @@ def plan_corners(paths, floor):
     return _dedup(out, PLAN_TOL_PX)
 
 
-def _dedup(corners, tol):
+def _dedup(corners: Sequence[Corner], tol: float) -> list[Corner]:
     kept = []
     for c in sorted(corners, key=lambda c: (c["kind"] != "L")):
         if all(math.dist((c["x"], c["y"]), (k["x"], k["y"])) > tol
@@ -78,9 +87,9 @@ def _dedup(corners, tol):
 
 # ---------------------------------------------------------------- 密度側
 
-def dominant_angle(pts):
+def dominant_angle(pts: Points2) -> float:
     """壁点群 (row,col) の支配的方位 [0,90) deg。射影ヒストグラム集中度で探索"""
-    best = (None, -1)
+    best: tuple[float, float] = (0.0, -1.0)
     for deg in np.arange(0, 90, 1.0):
         th = math.radians(deg)
         R = np.array([[math.cos(th), -math.sin(th)],
@@ -95,7 +104,7 @@ def dominant_angle(pts):
     return best[0]
 
 
-def _runs(mask_1d, min_len):
+def _runs(mask_1d: BoolArr, min_len: int) -> list[tuple[int, int]]:
     """1次元占有列から、DENS_GAPまでのギャップを許容したランを列挙"""
     idx = np.nonzero(mask_1d)[0]
     if len(idx) == 0:
@@ -111,7 +120,7 @@ def _runs(mask_1d, min_len):
     return [(a, b) for a, b in runs if b - a + 1 >= min_len]
 
 
-def _wall_lines(img, axis):
+def _wall_lines(img: BoolArr, axis: int) -> list[tuple[int, int, int]]:
     """占有ラスタから壁「線」を抽出: 行(axis=0)/列(axis=1)の占有数の
     局所ピークを線位置とし、±DENS_BAND帯を潰した1D占有からラン(線分)を得る。
     返り値: list of (line_pos, a, b)"""
@@ -138,7 +147,7 @@ def _wall_lines(img, axis):
     return kept
 
 
-def density_corners(pts):
+def density_corners(pts: Points2) -> tuple[list[Corner], float]:
     """密度の壁点 (row,col) からコーナーを検出。
     返り値: (corners list of dict{r, c, kind, quad, arms}, 支配的方位deg)
     r,c は入力と同じ座標系 (回転を戻して返す)"""
@@ -196,20 +205,22 @@ MAX_CAND = 900            # 互換対応の上限 (超過はランダム間引�
 REPS_PER_BUCKET = 3       # 並進バケツごとに数え上げる代表仮説数
 
 
-def _rot2(th):
+def _rot2(th: Scalar) -> F64:
     return np.array([[math.cos(th), -math.sin(th)],
                      [math.sin(th), math.cos(th)]])
 
 
-def _quad_rot(quad, k):
+def _quad_rot(quad, k: int) -> tuple[int, int]:
     """象限シグネチャ (scol,srow) を90°×k回転 (plan cell系の回転と同じ規約)"""
     v = np.array([quad[1], quad[0]], float)   # (row,col)ベクトル
     v = _rot2(math.radians(90 * k)) @ v
     return (int(round(v[1])), int(round(v[0])))
 
 
-def match_corners(dens_cs, deg, plan_cs_cell, s_prior=None, s_rel_tol=0.4,
-                  top_k=12):
+def match_corners(dens_cs: Sequence[Corner], deg: float,
+                  plan_cs_cell: Sequence[Corner],
+                  s_prior: float | None = None, s_rel_tol: float = 0.4,
+                  top_k: int = 12) -> list[dict[str, Any]]:
     """密度コーナー↔図面コーナーのRANSAC照合
 
     dens_cs: density_cornersの出力 (r,c=density cell系, quadは軸整列系)
@@ -312,7 +323,7 @@ def match_corners(dens_cs, deg, plan_cs_cell, s_prior=None, s_rel_tol=0.4,
 
 # ---------------------------------------------------------------- 検証
 
-def _plot_plan(paths, floor, out_dir):
+def _plot_plan(paths: Paths, floor: str, out_dir: Path) -> list[Corner]:
     corners = plan_corners(paths, floor)
     bg = np.asarray(Image.open(paths.floors / f"{floor}.jpg").convert("L"))
     fig, ax = plt.subplots(figsize=(13, 9))
@@ -332,7 +343,8 @@ def _plot_plan(paths, floor, out_dir):
     return corners
 
 
-def _plot_island(paths, tag, floor, plan_cs, out_dir):
+def _plot_island(paths: Paths, tag: str, floor: str,
+                 plan_cs: Sequence[Corner], out_dir: Path) -> None:
     """島の密度コーナーを検出し、raysアンカーで図面に載せて重なりを確認"""
     from recon3d.postproc.anchor import prepare_island
     from recon3d.core.plan_grid import PlanGrid
@@ -373,7 +385,7 @@ def _plot_island(paths, tag, floor, plan_cs, out_dir):
     plt.close(fig)
 
 
-def plan_corners_cell(paths, floor, grid):
+def plan_corners_cell(paths: Paths, floor: str, grid) -> list[Corner]:
     """図面コーナーを plan cell 座標へ"""
     out = []
     for c in plan_corners(paths, floor):
@@ -409,12 +421,13 @@ CONT_MARGIN = 1.5
 CONT_MIN_M = 4.0          # 隙間ゼロでもこれだけは許す (島内の端点ずれを吸収)
 
 
-def _cont_bound(gap_frames):
+def _cont_bound(gap_frames: float) -> float:
     """フレーム差から許容距離[m]を決める (人は瞬間移動しない)"""
     return max(CONT_MIN_M, gap_frames * CONT_SPEED * CONT_MARGIN)
 
 
-def _nearest_anchored(paths, tag, frames, suffix=""):
+def _nearest_anchored(paths: Paths, tag: str, frames: Sequence[int],
+                      suffix: str = "") -> tuple | None:
     """アンカー済みの他島から、この島に時間的に最も近い基準点を拾う
 
     返り値 (この島のindex, 基準の図面px, 基準フレーム, フレーム差)。
@@ -440,7 +453,8 @@ def _nearest_anchored(paths, tag, frames, suffix=""):
     return j, known[kf], kf, abs(kf - frames[j])
 
 
-def _rot_branches(cands, cam_rc):
+def _rot_branches(cands: Sequence[dict[str, Any]],
+                  cam_rc: Points2) -> list[dict[str, Any]]:
     """各候補を島の重心まわりに90/180/270°回した変種 (重心は動かさない)"""
     c0 = cam_rc.mean(axis=0)
     out = []
@@ -456,10 +470,20 @@ def _rot_branches(cands, cam_rc):
     return out
 
 
-def corner_anchor(paths, tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
-                  s_prior=None, suffix="_corners", return_info=False,
-                  mpu_source="mapany", sweep=S_SWEEP, continuity_ref=False):
+#: フレーム名 -> 図面px (x, y)
+Track: TypeAlias = "dict[str, tuple[float, float]]"
+
+
+def corner_anchor(paths: Paths, tag: str, floor: str,
+                  ref_tag: str | None = None, cont_max_m: float = 4.0,
+                  mpu: float | None = None, s_prior: float | None = None,
+                  suffix: str = "_corners", return_info: bool = False,
+                  mpu_source: str = "mapany", sweep=S_SWEEP,
+                  continuity_ref: bool = False
+                  ) -> Track | tuple[Track, dict[str, Any]]:
     """島をコーナーRANSAC照合でアンカーし、壁ICPで精密化して保存する
+
+    `return_info=True` のときだけ (track, 指標) の組を返す。
 
     ref_tag: スケール事前用の配置済み島 (スラブ推定の比。無ければ事前なし)
     cont_max_m: 時系列連続性フィルタ。既存trajectory.jsonの島フレームのうち
@@ -523,7 +547,11 @@ def corner_anchor(paths, tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
         j, xy, _, _ = cont_ref
         px = cells_to_px(transform_pts(cam_rc[j][None], s_, th_, t_), grid)[0]
         from recon3d.eval.gt_traj import mm_per_px
-        return math.dist(px, xy) * mm_per_px(paths) / 1000
+        mpx = mm_per_px(paths)
+        if mpx is None:
+            raise SystemExit(
+                "連続性拘束にはメートル換算が要る (図面の実寸が未設定)")
+        return math.dist(px, xy) * mpx / 1000
 
     zz2, xx2 = np.nonzero(d["density"] > 0.15)
     wall_pts = np.stack([zz2, xx2], axis=1).astype(np.float64)
@@ -609,7 +637,7 @@ def corner_anchor(paths, tag, floor, ref_tag=None, cont_max_m=4.0, mpu=None,
     return track
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--anchor", default=None, help="'tag:floor' コーナーアンカー実行")

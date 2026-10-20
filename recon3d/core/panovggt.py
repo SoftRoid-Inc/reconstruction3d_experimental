@@ -8,8 +8,11 @@ PanoVGGT の inference.py (無改変) を**同一プロセスで**呼ぶ。撮�
 
 出力: results/pcd/points.ply (統合点群) / cameras.npz (姿勢+フレームID)
 """
+from __future__ import annotations
+
 import argparse
 import json
+from typing import Any, Sequence
 import os
 from pathlib import Path
 
@@ -20,13 +23,15 @@ from PIL import Image
 from scipy import ndimage
 
 from recon3d.core.io_ply import read_ply_xyzrgb
+from recon3d.paths import Paths
+from recon3d.types import U8
 from recon3d.core.sample_frames import load_selected
 
 PANOVGGT_CONFIG = os.environ.get("PANOVGGT_CONFIG",
                                  "training/config/default.yaml")
 
 
-def _panovggt_paths():
+def _panovggt_paths() -> tuple[Path, str]:
     """(PanoVGGTディレクトリ, 重み) を返す。使えなければ SystemExit
 
     **`PANOVGGT_DIR` を持つのはイメージだけ** (Dockerfile が設定する)。
@@ -60,7 +65,7 @@ NADIR_INVALID_FRAC = 0.07  # 画像下端の無効帯 (自撮り棒・手元)
 MASK_WH = (2048, 1024)  # PanoVGGTに渡すマスク解像度 (seg結果と同じ)
 
 
-def build_mask(paths, name):
+def build_mask(paths: Paths, name: str) -> U8 | None:
     """有効画素マスク(白=有効)を作る。
     物件に既存人物マスク(白=有効/黒=人物)があればそれを縮小して使い、
     無ければseg_ade20kのperson結果から作る。どちらも無ければNone"""
@@ -69,7 +74,8 @@ def build_mask(paths, name):
         p = paths.masks / paths.frame_name(num)
         if not p.exists():
             return None
-        img = Image.open(p).convert("L").resize(MASK_WH, Image.BILINEAR)
+        img = Image.open(p).convert("L").resize(
+            MASK_WH, Image.Resampling.BILINEAR)
         person = np.asarray(img) < 128
     else:
         npz = paths.seg / f"{name}_labels.npz"
@@ -77,14 +83,17 @@ def build_mask(paths, name):
             return None
         labels = np.load(npz)["labels"]
         person = labels == GROUP_IDS["person"]
-    person = ndimage.binary_dilation(person, iterations=PERSON_DILATE_ITER)
+    person = np.asarray(
+        ndimage.binary_dilation(person, iterations=PERSON_DILATE_ITER),
+        dtype=bool)
     valid = ~person
     h = valid.shape[0]
     valid[int(h * (1 - NADIR_INVALID_FRAC)):, :] = False
     return (valid * 255).astype(np.uint8)
 
 
-def select_entries(paths, frames_spec):
+def select_entries(paths: Paths,
+                   frames_spec: str | None) -> list[dict[str, Any]]:
     """frames_spec 'start:end:step' 指定があれば連続レンジ、無ければ代表フレーム"""
     if frames_spec is None:
         return load_selected(paths)
@@ -97,7 +106,9 @@ def select_entries(paths, frames_spec):
     return entries
 
 
-def prepare_inputs(paths, entries, input_dir, mask_dir, use_mask=True):
+def prepare_inputs(paths: Paths, entries: Sequence[dict[str, Any]],
+                   input_dir: Path, mask_dir: Path,
+                   use_mask: bool = True) -> tuple[list[str], int]:
     input_dir.mkdir(parents=True, exist_ok=True)
     mask_dir.mkdir(parents=True, exist_ok=True)
     names = []
@@ -116,7 +127,7 @@ def prepare_inputs(paths, entries, input_dir, mask_dir, use_mask=True):
     return names, n_masks
 
 
-def local_floor_height(ply_path):
+def local_floor_height(ply_path: Path) -> float | None:
     """per-frameローカル点群から直下床までの高さ(units)を推定。失敗時None"""
     if not ply_path.exists():
         return None
@@ -132,14 +143,15 @@ def local_floor_height(ply_path):
 
 
 
-def _infer(chunks):
+def _infer(chunks: Sequence[dict[str, Any]]) -> None:
     """PanoVGGT 推論の唯一の入口 (同一プロセス。モデル読み込みは1回)"""
     from recon3d.core.panovggt_batch import run_spec
     pdir, ckpt = _panovggt_paths()
     run_spec(chunks, pdir, PANOVGGT_CONFIG, ckpt)
 
 
-def run_panovggt(paths, entries, out_dir, use_mask=True):
+def run_panovggt(paths: Paths, entries: Sequence[dict[str, Any]],
+                 out_dir: Path, use_mask: bool = True) -> None:
     """フレーム集合に対してPanoVGGT推論を実行し、out_dir に標準形式で保存する"""
     input_dir = out_dir / "input"
     mask_dir = out_dir / "input_mask"
@@ -174,7 +186,9 @@ def run_panovggt(paths, entries, out_dir, use_mask=True):
     print(json.dumps(stats, indent=2))
 
 
-def run_chunks(paths, windows, entries, chunks_dir, use_mask=True):
+def run_chunks(paths: Paths, windows: Sequence[tuple[int, int, int]],
+               entries: Sequence[dict[str, Any]], chunks_dir: str,
+               use_mask: bool = True) -> None:
     """複数チャンクをまとめて推論する (モデル読み込みは1回)
 
     windows: [(k, a, b)] — k=チャンク番号、[a:b) がフレーム範囲。
@@ -204,7 +218,7 @@ def run_chunks(paths, windows, entries, chunks_dir, use_mask=True):
             _collect(paths.pcd / chunks_dir / f"chunk_{k:02d}", names_of[k])
 
 
-def _collect(out_dir, names):
+def _collect(out_dir: Path, names: Sequence[str]) -> None:
     """inference.py の出力をパイプラインの契約へ読み替える"""
     vggt_out = out_dir / "panovggt_out"
     xyz, _ = read_ply_xyzrgb(vggt_out / "pointclouds" / "merged.ply")
@@ -219,7 +233,7 @@ def _collect(out_dir, names):
         "bbox_max": xyz.max(axis=0).tolist()}, indent=2))
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--frames", default=None,
                     help="'start:end:step' の連続レンジ。省略時は代表16フレーム")

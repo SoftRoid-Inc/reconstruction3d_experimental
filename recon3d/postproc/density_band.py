@@ -15,6 +15,9 @@ FlowStateで水平が保たれ撮影者の身長も一定なので安定した�
 なお壁はカメラの上下に対称には無い (カメラ1.4mなら上に約1.0m・下に約1.4m)
 ので、**非対称な帯**になるのが正常。
 """
+from __future__ import annotations
+
+from recon3d.types import BoolArr, Points2, Points3
 import numpy as np
 
 MIN_BIN_PTS = 2000     # これ未満の点しかないビンは判定に使わない
@@ -24,7 +27,8 @@ MIN_BAND_M = 0.8       # これより狭い帯は信用しない
 MIN_KEEP_FRAC = 0.25   # 帯で点がこれ未満しか残らないなら信用しない
 
 
-def _occupancy(xz, cell_u, shape, origin):
+def _occupancy(xz: Points2, cell_u: float, shape: tuple[int, int],
+               origin: tuple[float, float]) -> BoolArr:
     ox, oz = origin
     ix = np.clip(((xz[:, 0] - ox) / cell_u).astype(np.int32), 0, shape[1] - 1)
     iz = np.clip(((xz[:, 1] - oz) / cell_u).astype(np.int32), 0, shape[0] - 1)
@@ -33,7 +37,9 @@ def _occupancy(xz, cell_u, shape, origin):
     return occ
 
 
-def bin_profile(pts, cam_y, mpu, cell_m=0.05, bin_m=0.20):
+def bin_profile(pts: Points3, cam_y: float, mpu: float,
+                cell_m: float = 0.05,
+                bin_m: float = 0.20) -> list[dict[str, float]]:
     """高さビンごとの「壁らしさ」 [{h_m, n, iou}]。h_m はカメラ基準 (上が正)"""
     cell_u, bin_u = cell_m / mpu, bin_m / mpu
     ox, oz = pts[:, 0].min() - 2 * cell_u, pts[:, 2].min() - 2 * cell_u
@@ -66,7 +72,9 @@ def bin_profile(pts, cam_y, mpu, cell_m=0.05, bin_m=0.20):
     return out
 
 
-def measure_band(pts, cam_y, mpu, frac=IOU_FRAC, **kw):
+def measure_band(pts: Points3, cam_y: float, mpu: float,
+                 frac: float = IOU_FRAC,
+                 **kw) -> tuple[float, float] | None:
     """壁の帯 (lo_m, hi_m) をカメラ基準[m]で返す。測れなければ None
 
     カメラ高さを含む**連続区間**だけを採る。飛び地は家具の塊なので入れない。
@@ -96,7 +104,8 @@ def measure_band(pts, cam_y, mpu, frac=IOU_FRAC, **kw):
     return band
 
 
-def band_mask(pts, cam_y, mpu, band):
+def band_mask(pts: Points3, cam_y: float, mpu: float,
+              band) -> tuple[BoolArr, tuple[float, float]]:
     """帯に入る点のマスク。band は (lo_m, hi_m) / 数値(片側幅) / "auto" """
     if band == "auto":
         b = measure_band(pts, cam_y, mpu)

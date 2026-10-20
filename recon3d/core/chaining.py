@@ -10,24 +10,30 @@ DA3形式 (per_frame.npz) の両方のチャンクレイアウトに対応する
 
 出力: results/frontend_bench/<tag>/ {global_cameras.npz, global_points.ply, chain_log.json}
 """
+from __future__ import annotations
+
 import argparse
 import json
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
-from scipy.spatial import cKDTree
+from scipy.spatial import cKDTree  # type: ignore[attr-defined]
 
 from recon3d.core.geometry import apply, compose, sim3_umeyama
 from recon3d.core.geometry import rotation_to_y
 from recon3d.core.io_ply import read_ply_xyzrgb
 from recon3d.core.geometry import robust_yaw_median, rot_y
+from recon3d.paths import Paths
+from recon3d.types import F64, Mat3, Points3, Sim3
 
 ICP_ITERS = 15
 TRIM = 0.7            # 対応の下位30%(距離大)を捨てる
 MAX_PTS = 20000
 
 
-def trimmed_icp_sim3(src, dst, T0, fix_R=False):
+def trimmed_icp_sim3(src: Points3, dst: Points3, T0: Sim3,
+                     fix_R: bool = False) -> tuple[Sim3, float]:
     """src(→dst)の trimmed Sim(3) ICP。src/dst: (N,3)
 
     スケールは初期値(カメラ中心Umeyama)の±25%にクランプする。
@@ -68,7 +74,7 @@ def trimmed_icp_sim3(src, dst, T0, fix_R=False):
     return T, resid
 
 
-def med_yaw(rots):
+def med_yaw(rots: F64) -> tuple[float, Mat3]:
     """cam2world回転群の重力整列ヨー中央値と重力回転Rg"""
     ups = rots[:, :, 1]
     up = np.median(ups / np.linalg.norm(ups, axis=1, keepdims=True), axis=0)
@@ -78,18 +84,19 @@ def med_yaw(rots):
     return med, Rg
 
 
-def lock_rotation(g_rots, cur_rots):
+def lock_rotation(g_rots: Sequence[Mat3], cur_rots: F64) -> Mat3:
     """方位ロック: 回転 = 重力整列の一致 + ヨー中央値の一致 で一意に決まる
 
     「撮影中ヨーは一定」という仮定を置く。FlowStateの実測ヨーが使えるなら
     `lock_rotation_flowstate` の方が正確 (実測ではヨーは一定でなく±12°動く)。
     """
-    m_g, Rg_g = med_yaw(np.stack(g_rots))
+    m_g, Rg_g = med_yaw(np.stack(list(g_rots)))
     m_c, Rg_c = med_yaw(cur_rots)
     return Rg_g.T @ rot_y(m_g - m_c) @ Rg_c
 
 
-def _gauge_offset(names, rots, fs_yaw):
+def _gauge_offset(names: Sequence[str], rots: F64,
+                  fs_yaw: F64) -> tuple[float | None, Mat3]:
     """このチャンクの「ゲージ ↔ 世界」のヨー差 [rad]。FlowStateの実測ヨーを使う
 
     ヨーは角度なので複素平均で畳む (±180°の折返しを跨がないため)。
@@ -105,7 +112,9 @@ def _gauge_offset(names, rots, fs_yaw):
     return float(np.angle(np.exp(1j * d).mean())), Rg
 
 
-def lock_rotation_flowstate(g_rots, g_names, cur_rots, cur_names, fs_yaw):
+def lock_rotation_flowstate(g_rots: Sequence[Mat3], g_names: Sequence[str],
+                            cur_rots: F64, cur_names: Sequence[str],
+                            fs_yaw: F64) -> Mat3 | None:
     """FlowStateの実測ヨーで連結回転を決める (累積回転を断つ)
 
     従来の `lock_rotation` は「ヨー一定」を仮定するため、仮定からのずれが
@@ -116,7 +125,7 @@ def lock_rotation_flowstate(g_rots, g_names, cur_rots, cur_names, fs_yaw):
 
     返り値: 回転行列。FlowStateが使えなければ None (呼び出し側が従来版へ)
     """
-    o_g, Rg_g = _gauge_offset(g_names, np.stack(g_rots), fs_yaw)
+    o_g, Rg_g = _gauge_offset(g_names, np.stack(list(g_rots)), fs_yaw)
     o_c, Rg_c = _gauge_offset(cur_names, cur_rots, fs_yaw)
     if o_g is None or o_c is None:
         return None
@@ -124,7 +133,8 @@ def lock_rotation_flowstate(g_rots, g_names, cur_rots, cur_names, fs_yaw):
     return Rg_g.T @ rot_y(o_c - o_g) @ Rg_c
 
 
-def chain(paths, cdirs, yaw_lock=False):
+def chain(paths: Paths, cdirs: Sequence[Path],
+          yaw_lock: bool = False) -> tuple[list, list[Sim3], list[dict]]:
     """チャンク列を順に連結し (chunks, 変換列T, ログ) を返す
 
     yaw_lock: False=ICPが回転も解く (既定) / True=ヨー一定を仮定してロック /
@@ -192,7 +202,7 @@ def chain(paths, cdirs, yaw_lock=False):
 # 実際に踏み、再推論し直した)。`posegraph` も同じものを使う。
 
 
-def load_chunk(cdir):
+def load_chunk(cdir: Path) -> tuple:
     """チャンクの (names, cam_positions, poses, per-frame点群dict, 不信集合) を読む
 
     untrusted.json (yaw_fixが出力) にあるフレームはこのチャンク内でポーズ全壊
@@ -222,19 +232,20 @@ def load_chunk(cdir):
     return names, cams["positions"], cams["poses"], pf, untrusted
 
 
-def _sim3_mul(A, B):
+def _sim3_mul(A: Sim3, B: Sim3) -> Sim3:
     """相似変換の合成 (Bを適用してからA)"""
     sa, Ra, ta = A
     sb, Rb, tb = B
     return (sa * sb, Ra @ Rb, sa * (Ra @ tb) + ta)
 
 
-def _sim3_inv(T):
+def _sim3_inv(T: Sim3) -> Sim3:
     s, R, t = T
     return (1.0 / s, R.T, -(R.T @ t) / s)
 
 
-def drift_correct(chunks, T, fs_yaw, min_links=3):
+def drift_correct(chunks: Sequence, T: list[Sim3], fs_yaw: F64,
+                  min_links: int = 3) -> tuple[list[Sim3], float]:
     """連結で積み上がったヨーの**系統バイアス**だけを除く
 
     `lock_rotation_flowstate` のようにICPの回転をFlowStateで置き換えると、
@@ -273,7 +284,9 @@ def drift_correct(chunks, T, fs_yaw, min_links=3):
     return out, slope
 
 
-def chain_and_save(paths, cdirs, tag, yaw_lock=False, drift_fix=False):
+def chain_and_save(paths: Paths, cdirs: Sequence[Path], tag: str,
+                   yaw_lock: bool = False,
+                   drift_fix: bool = False) -> Path:
     """チャンク列を連結して frontend_bench/<tag>/ に書き出す (mainの本体)
 
     drift_fix: 連結後にヨーの系統バイアスを除く (要 imu/flowstate_yaw)
@@ -281,7 +294,14 @@ def chain_and_save(paths, cdirs, tag, yaw_lock=False, drift_fix=False):
     chunks, T, log = chain(paths, cdirs, yaw_lock=yaw_lock)
     if drift_fix:
         from recon3d.imu.flowstate_yaw import load as load_fs
-        T, sl = drift_correct(chunks, T, load_fs(paths))
+        fs = load_fs(paths)
+        if fs is None:
+            raise SystemExit(
+                f"drift_fix には FlowState ヨーが要る: {paths.imu}/"
+                "flowstate_yaw.npz\n  docker compose exec imu "
+                "python main.py tool flowstate_yaw --input "
+                f"{paths.root}")
+        T, sl = drift_correct(chunks, T, fs)
         print(f"[drift_fix] ヨーバイアス {np.degrees(sl):+.2f}°/chunk を除去")
     # グローバル軌跡と点群
     out = paths.bench / tag
@@ -323,7 +343,7 @@ def chain_and_save(paths, cdirs, tag, yaw_lock=False, drift_fix=False):
     return out
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--chunks-root", required=True)
     ap.add_argument("--tag", required=True)

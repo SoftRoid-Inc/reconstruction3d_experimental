@@ -14,6 +14,8 @@ MapAnythingポーズ条件付け (macond) はVRAM制約で間引きフレーム�
   python main.py tool interp --input /data/x --all   # pv_manifest.jsonの全島
 出力: frontend_bench/maf<島名>/ (chain_chunks契約。点群はmacondのものを流用)
 """
+from __future__ import annotations
+
 import argparse
 import json
 import shutil
@@ -21,11 +23,13 @@ import shutil
 import numpy as np
 
 from recon3d.core.geometry import apply, sim3_umeyama
+from recon3d.paths import Paths
+from recon3d.types import F64, Mat3
 
 CTRL_WIN = 3      # Sim3フィットに使う近傍制御点数 (片側)
 
 
-def _load(paths, tag):
+def _load(paths: Paths, tag: str) -> tuple:
     d = np.load(paths.bench / tag / "global_cameras.npz")
     names = [str(n) for n in d["names"]]
     frames = np.array([int(n.replace("frame_", "")) for n in names])
@@ -34,7 +38,7 @@ def _load(paths, tag):
             d["positions"][order], d["poses"][order])
 
 
-def _blend_rot(Ra, Rb, w):
+def _blend_rot(Ra: Mat3, Rb: Mat3, w: float) -> Mat3:
     """2回転の球面補間 (クォータニオン正規化で十分な近似)"""
     qa, qb = _quat(Ra), _quat(Rb)
     if np.dot(qa, qb) < 0:
@@ -44,7 +48,7 @@ def _blend_rot(Ra, Rb, w):
     return _quat_to_r(q)
 
 
-def _quat(R):
+def _quat(R: Mat3) -> F64:
     w = np.sqrt(max(0, 1 + R[0, 0] + R[1, 1] + R[2, 2])) / 2
     if w < 1e-6:
         i = int(np.argmax(np.diag(R)))
@@ -56,7 +60,7 @@ def _quat(R):
                      (R[1, 0] - R[0, 1]) / (4 * w)])
 
 
-def _quat_to_r(q):
+def _quat_to_r(q: F64) -> Mat3:
     w, x, y, z = q
     return np.array([
         [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
@@ -64,7 +68,7 @@ def _quat_to_r(q):
         [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
 
 
-def interp(paths, pv_tag, ma_tag, out_tag):
+def interp(paths: Paths, pv_tag: str, ma_tag: str, out_tag: str) -> None:
     names_p, fr_p, P, pose_p = _load(paths, pv_tag)
     names_m, fr_m, Q, pose_m = _load(paths, ma_tag)
     name_to_i = {n: i for i, n in enumerate(names_p)}
@@ -122,7 +126,7 @@ def interp(paths, pv_tag, ma_tag, out_tag):
           f"ctrl resid pre-snap med {np.median(snap):.3f}m)")
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pv")
     ap.add_argument("--ma")

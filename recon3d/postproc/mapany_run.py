@@ -3,12 +3,16 @@
 `postproc/mapany` 本体は mapanything コンテナでしか動かないので、
 オーケストレーション側だけ分けてある (ホストで import しても落ちない)。
 """
+from __future__ import annotations
+
+from recon3d.paths import Paths
+from recon3d.types import Manifest
 import argparse
 
 
-def run_mapany(paths, manifest):
+def run_mapany(paths: Paths, manifest: Manifest) -> None:
     try:
-        import mapanything  # noqa: F401
+        import mapanything  # type: ignore[import-not-found] # noqa: F401
         in_container = True
     except ImportError:
         in_container = False

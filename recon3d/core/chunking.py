@@ -7,16 +7,28 @@ PanoVGGTで推論(既存はスキップ=再開可能)して chain_chunks で連�
 出力: frontend_bench/pv<sess>_<fl>[a,b,…]/ と pv_manifest.json
 使い方: python main.py run input=/data/reconstruction 'steps=[chains]'
 """
+from __future__ import annotations
+
 import json
+from typing import Iterable, Sequence, TypeAlias
 
 from recon3d.core.chaining import chain_and_save
 from recon3d.core.panovggt import select_entries
+from recon3d.paths import Paths
+from recon3d.types import Manifest
+
+#: 区間 (階名 or None, 開始フレーム, 終了フレーム)
+Seg: TypeAlias = "tuple[str | None, int, int]"
+
+#: 直近の `imu_segments` が置いた切断点 (build_manifest の fallback が読む)
+LAST_IMU_CUTS: list[tuple[int, int]] = []
 
 CHUNK_SIZE = 16
 CHUNK_STRIDE = 12          # 重なり = CHUNK_SIZE - CHUNK_STRIDE = 4フレーム
 
 
-def chunk_windows(n, stride=None, size=None):
+def chunk_windows(n: int, stride: int | None = None,
+                  size: int | None = None) -> list[tuple[int, int]]:
     """チャンク窓列。strideを小さくすると重なりが増える
 
     **重なりを増やしても島の精度は上がらない** (2026-10-16実測、外部データ
@@ -49,7 +61,7 @@ MIN_RESCUE_FRAMES = 12  # 切除後の端切れをミニ島として救済する
 MIN_ANCHOR_FRAMES = 36
 
 
-def gt_segments(paths):
+def gt_segments(paths: Paths) -> list[Seg]:
     """GT軌跡 → [(floor, a, b)] (連続訪問区間)。開発・評価用 (GT必要)
 
     GTの出どころは物件で違う (28-BBBBB=手動登録CSV / 28-AAAAA=メタCSV) ので
@@ -76,7 +88,7 @@ IDLE_PAD = 2          # 静止区間の前後マージン (検出は真の静止
 MIN_IDLE_FRAMES = 4   # これ未満の静止は切断しない (島を無駄に刻まない)
 
 
-def idle_cuts(paths, n_frames):
+def idle_cuts(paths: Paths, n_frames: int) -> list[tuple[int, int]]:
     """静止区間 (imu.idle) → 切断点 [(a, b)]。無ければ空
 
     並進ゼロでは三角測量が成立せず、その区間を含むチャンク接続が島全体を壊す
@@ -100,7 +112,8 @@ def idle_cuts(paths, n_frames):
     return out
 
 
-def imu_segments(paths, n_frames, use_idle=True):
+def imu_segments(paths: Paths, n_frames: int,
+                 use_idle: bool = True) -> list[Seg]:
     """IMU階段検出 (imu.transitions, stairnet CNN) → [(None, a, b)]。GT不要
 
     検出イベント(昇降)を切断点として区間を切る。stairnetは再現率が高い一方、
@@ -141,12 +154,17 @@ def imu_segments(paths, n_frames, use_idle=True):
         prev = b + 1
     if n_frames - 1 - prev + 1 >= MIN_ANCHOR_FRAMES:
         segs.append((None, prev, n_frames - 1))
-    imu_segments.last_cuts = cuts    # build_manifestのfallbackが切断回避に使う
+    # build_manifest の fallback が「切ってよい場所」を知るために使う。
+    # 関数属性だと型検査が通らないのでモジュール変数に置く
+    global LAST_IMU_CUTS
+    LAST_IMU_CUTS = cuts
     return segs
 
 
-def build_manifest(paths, windows, max_seg=None, segments=None, prefix="pv",
-                   tag_suffix=""):
+def build_manifest(paths: Paths, windows: Sequence[tuple[int, int]],
+                   max_seg: int | None = None,
+                   segments: Sequence[Seg] | None = None,
+                   prefix: str = "pv", tag_suffix: str = "") -> Manifest:
     """max_seg指定時: それより長い訪問区間を等分割する (長島ドリフト対策。
     タグは pv0925_1Fa1, 1Fa2… のように数字接尾辞)。
     segments: [(floor|None, a, b)] を外部注入可 (imu_segments等)。
@@ -177,7 +195,7 @@ def build_manifest(paths, windows, max_seg=None, segments=None, prefix="pv",
                 if len(ks_in) >= 2:
                     use = ks_in
                 else:   # 小さい区間: 重なるチャンクまで許容 (切断域は回避)
-                    cuts = getattr(imu_segments, "last_cuts", [])
+                    cuts = LAST_IMU_CUTS
                     use = [k for k, (wa, wb) in enumerate(windows)
                            if wa < b2 + 1 and wb > a2
                            and not any(wa <= cb_ and wb - 1 >= ca_
@@ -203,7 +221,10 @@ def build_manifest(paths, windows, max_seg=None, segments=None, prefix="pv",
 MODEL_DIRS = {"pv": ("chunks", "pv")}
 
 
-def infer_chunks(paths, model, windows, needed, chunks_dir, entries):
+def infer_chunks(paths: Paths, model: str,
+                 windows: Sequence[tuple[int, int]],
+                 needed: Iterable[int], chunks_dir: str,
+                 entries: Sequence[dict]) -> None:
     """欠けているチャンクだけ推論する (既存はスキップ=再開可能)
 
     1チャンクずつモデルを読み直すと固定コスト12.2秒が毎回かかる
@@ -220,9 +241,13 @@ def infer_chunks(paths, model, windows, needed, chunks_dir, entries):
     print(f"[pv] {len(miss)} チャンクを一括推論", flush=True)
     run_chunks(paths, miss, entries, chunks_dir, use_mask=True)
 
-def run_batch(paths, max_seg=None, manifest_out=None,
-              chunks_dir=None, segments_source="gt", stride=None,
-              use_idle=True, model="pv", chunk_size=None, tag_suffix=""):
+def run_batch(paths: Paths, max_seg: int | None = None,
+              manifest_out: str | None = None,
+              chunks_dir: str | None = None,
+              segments_source: str = "gt", stride: int | None = None,
+              use_idle: bool = True, model: str = "pv",
+              chunk_size: int | None = None,
+              tag_suffix: str = "") -> Manifest:
     """前段一括: 区間計画 → チャンク推論(既存スキップ) → 区間別チェーン
 
     segments_source: "gt"=gt_trajectory.csv(開発・評価用) / "imu"=stairnet検出
@@ -259,8 +284,11 @@ def run_batch(paths, max_seg=None, manifest_out=None,
     return manifest
 
 
-def stair_resplit(paths, manifest, chunks_dir="chunks",
-                  manifest_out="pv_manifest.json", max_depth=2, stride=None):
+def stair_resplit(paths: Paths, manifest: Manifest,
+                  chunks_dir: str = "chunks",
+                  manifest_out: str = "pv_manifest.json",
+                  max_depth: int = 2,
+                  stride: int | None = None) -> Manifest:
     """チェーン済み島を幾何検査し、階段またぎ島を自動再分割して再チェーンする
 
     stairnet(IMU)の見逃し対策 (core/stair_check)。再分割島のタグは <元>r1/r2。
@@ -328,10 +356,12 @@ def stair_resplit(paths, manifest, chunks_dir="chunks",
     return out
 
 
-def stair_remerge(paths, manifest, chunks_dir="chunks",
-                  manifest_out="pv_manifest.json",
-                  max_gap=120, max_len=None, stride=None, max_seg=None,
-                  model="pv"):
+def stair_remerge(paths: Paths, manifest: Manifest,
+                  chunks_dir: str = "chunks",
+                  manifest_out: str = "pv_manifest.json",
+                  max_gap: int = 120, max_len: int | None = None,
+                  stride: int | None = None, max_seg: int | None = None,
+                  model: str = "pv") -> Manifest:
     """偽切断の癒合: 隣接島を隙間ごと仮連結し、幾何検査がcleanなら統合する
 
     stairnetの過検出 (はしご・脚立) は島を無駄に分断し、間の端切れが
@@ -402,7 +432,7 @@ def stair_remerge(paths, manifest, chunks_dir="chunks",
     return manifest
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-seg", type=int, default=None,

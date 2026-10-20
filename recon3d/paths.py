@@ -15,10 +15,15 @@
 未設定だと既定セッションに落ちて**別物件を黙って処理する**事故があった
 (2026-10-09)。引数なら渡し忘れが `TypeError` で即座に出る。
 """
+from __future__ import annotations
+
 import json
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
+from typing import Any
+
+from recon3d.types import PathLike
 
 
 @dataclass(frozen=True)
@@ -27,55 +32,55 @@ class Paths:
 
     # ---------------------------------------------------------------- 入力
     @property
-    def images(self):
+    def images(self) -> Path:
         return self.root / "images"
 
     @property
-    def masks(self):
+    def masks(self) -> Path | None:
         """人物マスク (白=有効)。無ければ None"""
         d = self.root / "masks"
         return d if d.is_dir() and next(d.glob("frame_number_*"), None) else None
 
     @property
-    def imu_in(self):
+    def imu_in(self) -> Path:
         """外部生成の IMU 派生物。`core/ingest` が results/imu へ取り込む"""
         return self.root / "imu"
 
     @property
-    def floors(self):
+    def floors(self) -> Path:
         """間取り図 (labelme JSON + jpg + meta.json)"""
         return self.root / "floors"
 
     # ---------------------------------------------------------------- 出力
     @property
-    def results(self):
+    def results(self) -> Path:
         return self.root / "results"
 
     @property
-    def pcd(self):
+    def pcd(self) -> Path:
         return self.results / "pcd"
 
     @property
-    def seg(self):
+    def seg(self) -> Path:
         return self.results / "seg"
 
     @property
-    def imu(self):
+    def imu(self) -> Path:
         return self.results / "imu"
 
     @property
-    def bench(self):
+    def bench(self) -> Path:
         """島タグの置き場 (global_cameras.npz / global_points.ply / chain_log)"""
         return self.results / "frontend_bench"
 
     @property
-    def backend(self):
+    def backend(self) -> Path:
         """アンカーjson・aligned_house 等"""
         return self.results / "backend"
 
     # ------------------------------------------------------------ 図面の実寸
     @cached_property
-    def meta(self):
+    def meta(self) -> dict[str, Any]:
         """floors/meta.json (無ければ {})
 
         図面の実寸 `known_width_mm` (最外壁芯間のx方向スパン[mm]) を持つ。
@@ -94,7 +99,7 @@ class Paths:
         _check_meta(p, m)
         return m
 
-    def floor_jsons(self):
+    def floor_jsons(self) -> list[tuple[str, Path]]:
         """間取り図の labelme JSON を**下階から順に**返す [(階名, Path)]
 
         `meta.json` は図面ではなく実寸の覚え書きなので外す。これを忘れると
@@ -102,7 +107,7 @@ class Paths:
         `KeyError: image_size` になる。B1F は地下なので負、RF/PH のように
         数字を持たない階名は末尾 (`core/floor_assign.floor_names` と同じ規則)。
         """
-        def key(name):
+        def key(name: str) -> tuple[int, int, str]:
             d = "".join(c for c in name if c.isdigit())
             if not d:
                 return (1, 0, name)
@@ -117,29 +122,29 @@ class Paths:
                        key=lambda p: key(p.stem))]
 
     @property
-    def known_width_mm(self):
+    def known_width_mm(self) -> float | dict[str, float] | None:
         """階名→mm の辞書、数値ひとつ、または None"""
         return self.meta.get("known_width_mm")
 
     @property
-    def mm_per_px(self):
+    def mm_per_px(self) -> float | None:
         """実測スケールが分かっていれば。無ければ図面から導出する"""
         return self.meta.get("mm_per_px")
 
     @property
-    def drawing_wh(self):
+    def drawing_wh(self) -> tuple[int, int]:
         wh = self.meta.get("drawing_wh")
         return tuple(wh) if wh else (2480, 1753)    # A4横300dpi
 
     # -------------------------------------------------------------- 識別子
     @property
-    def name(self):
+    def name(self) -> str:
         """タグ接頭辞などに使う。入力ディレクトリ名"""
         return self.root.name
 
     # -------------------------------------------------------------- フレーム
     @cached_property
-    def frame_indices(self):
+    def frame_indices(self) -> list[int]:
         """フレーム番号の昇順リスト。ゼロ詰め桁数には依存しない"""
         if not self.images.is_dir():
             return []
@@ -151,7 +156,7 @@ class Paths:
         return sorted(out)
 
     @cached_property
-    def frame_pad(self):
+    def frame_pad(self) -> int:
         """ファイル名のゼロ詰め桁数を実物から決める (既定6)"""
         for p in sorted(self.images.glob("frame_number_*.jpg")) \
                 if self.images.is_dir() else ():
@@ -160,20 +165,21 @@ class Paths:
                 return len(s)
         return 6
 
-    def frame_name(self, i, ext=".jpg"):
+    def frame_name(self, i: int, ext: str = ".jpg") -> str:
         return f"frame_number_{i:0{self.frame_pad}d}{ext}"
 
-    def frame_path(self, i, base=None, ext=".jpg"):
+    def frame_path(self, i: int, base: PathLike | None = None,
+                   ext: str = ".jpg") -> Path:
         return Path(base or self.images) / self.frame_name(i, ext)
 
     @property
-    def n_frames(self):
+    def n_frames(self) -> int:
         """フレーム範囲の上限 (= 最大番号+1)。0枚なら 0"""
         idx = self.frame_indices
         return idx[-1] + 1 if idx else 0
 
 
-def from_input(root):
+def from_input(root: PathLike) -> Paths:
     """入力ディレクトリから Paths を作る。存在しなければ SystemExit"""
     # symlink は**解決しない**。コンテナの /code2 マウント外のパスになるため
     import os
@@ -187,14 +193,14 @@ _META_HINT = ('最外壁芯間のx方向スパン[mm]。正の数、'
               '階で違うなら {"1F": 13877.5, "2F": 11375.0}')
 
 
-def _check_meta(path, m):
+def _check_meta(path: Path, m: dict[str, Any]) -> None:
     """型だけ入口で見る
 
     `known_width_mm` に文字列が入ると `scale_mm_per_px` が TypeError を出すが、
     それが飛ぶのは図面を読む瞬間なので原因が分かりにくい。
     `ext/` の meta.json が持つ s3key / n_frames 等の覚え書きは素通りさせる。
     """
-    def bad(k, why):
+    def bad(k: str, why: str) -> None:
         raise SystemExit(f"{path}: \"{k}\" が不正 ({why}) -> {m[k]!r}")
 
     kw = m.get("known_width_mm")

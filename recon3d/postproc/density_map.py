@@ -8,6 +8,8 @@
 出力: results/pcd/density.npz (density, origin, cell, m_per_unit, R_align, 鉛直軸情報)
       + density.png (目視確認用)
 """
+from __future__ import annotations
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -21,6 +23,8 @@ from recon3d.core.geometry import (camera_centers,
                                      gravity_from_cameras,
                                      rotation_to_y)
 from recon3d.core.io_ply import read_ply_xyzrgb
+from recon3d.paths import Paths
+from recon3d.types import F64
 
 CELL_M = 0.05          # 密度マップのセルサイズ (m相当)
 SLAB_MARGIN_M = 0.20   # 床・天井ピーク近傍の除去幅
@@ -28,7 +32,7 @@ GAMMA = 0.5
 N_HIST_BINS = 200
 
 
-def scale_from_local_floors(out_dir, cams):
+def scale_from_local_floors(out_dir, cams) -> float:
     """各フレーム直下の床までの高さ(カメラ高)の中央値からスケールを推定する
 
     stitch_chunks 出力なら floor_heights (チャンクスケール補正済み) を使い、
@@ -52,7 +56,7 @@ def scale_from_local_floors(out_dir, cams):
 
 
 
-def slab_peaks(y):
+def slab_peaks(y: F64) -> tuple[F64, F64, F64]:
     """鉛直座標ヒストグラムから床・天井等の水平面ピークを検出"""
     hist, edges = np.histogram(y, bins=N_HIST_BINS)
     centers = (edges[:-1] + edges[1:]) / 2
@@ -62,7 +66,7 @@ def slab_peaks(y):
     return centers[peaks][order], hist, centers
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag", default=None)

@@ -15,11 +15,13 @@ VRAM が解放されず、Dagster 側のキャンセルは成功したように�
 呼ばない — シグナルハンドラの差し替えは呼び出し元の領分だし、メインスレッド
 でしか登録できない。
 """
+from __future__ import annotations
+
 import os
 import signal
 
 
-def forward_to_process_group(sig=signal.SIGTERM):
+def forward_to_process_group(sig: int = signal.SIGTERM) -> bool:
     """`sig` を受けたらプロセスグループ全体へ中継してから死ぬ
 
     グループリーダーのときだけ働く。リーダーでない (別のラッパーに包まれて

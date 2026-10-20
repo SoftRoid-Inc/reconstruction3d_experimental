@@ -24,10 +24,13 @@
   v = sc(s, th, t)        # -> {"precision":…, "recall":…, "f1":…, …}
   v["f1_feas"]            # 既定の総合スコア
 """
+from __future__ import annotations
+
 import numpy as np
-from scipy.spatial import cKDTree
+from scipy.spatial import cKDTree  # type: ignore[attr-defined]
 
 from recon3d.postproc.plan_icp import transform_pts
+from recon3d.types import F64, Points2
 
 CUT_CELLS = 2.0        # 壁に載ったとみなす距離 (セル。1セル=0.05m → 10cm)
 SENSE_CELLS = 120.0    # 島が「到達した」とみなすカメラからの距離 (=6m)
@@ -47,7 +50,7 @@ CROSS_K = 3.0          # 貫通率のペナルティ強度
 CROSS_SAMPLES = 8      # 1線分あたりのサンプル点数
 
 
-def sample_segments(segs, step=SAMPLE_CELLS):
+def sample_segments(segs: F64, step: float = SAMPLE_CELLS) -> Points2:
     """壁線分 [(r0,c0,r1,c1)] を等間隔の点列にする"""
     a, b = segs[:, :2], segs[:, 2:]
     ln = np.linalg.norm(b - a, axis=1)

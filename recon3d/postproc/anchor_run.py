@@ -6,8 +6,13 @@
 の2点から、直接アンカーを既定にした (2026-10-14)。
 hier は直接アンカーが失敗した島の保険として残す。
 """
+from __future__ import annotations
+
 import concurrent.futures as cf
 import shutil
+
+from recon3d.paths import Paths
+from recon3d.types import Manifest
 
 # 2段アンカー: 1段目で全島を独立に解き、2段目はその結果を時系列の基準にして
 # **全島を1本ずつ順に解き直す**。人は連続して歩くので、隣の島から離れすぎた
@@ -19,7 +24,7 @@ import shutil
 CONTINUITY_STAGE = False
 
 
-def _anchor_one(args):
+def _anchor_one(args: tuple) -> tuple[str, str | None, float]:
     """1島をアンカー (プロセス並列のワーカー。例外は文字列で返す)
 
     args は 4要素 (tag, floor, root, suffix) か、継続性拘束を使う
@@ -33,14 +38,16 @@ def _anchor_one(args):
     from recon3d.postproc.corners import corner_anchor
     paths = from_input(root)
     try:
-        _, info = corner_anchor(paths, tag, floor, s_prior=1.0, suffix=suffix,
-                                return_info=True, continuity_ref=cont)
-        return tag, None, info.get("score", 0.0)
+        res = corner_anchor(paths, tag, floor, s_prior=1.0, suffix=suffix,
+                            return_info=True, continuity_ref=cont)
+        assert isinstance(res, tuple)   # return_info=True なので組で返る
+        return tag, None, res[1].get("score", 0.0)
     except Exception as e:                          # noqa: BLE001
         return tag, f"{type(e).__name__}: {e}", 0.0
 
 
-def anchor_islands(paths, manifest, jobs=None):
+def anchor_islands(paths: Paths, manifest: Manifest,
+                   jobs: int | None = None) -> None:
     no_floor = [m["tag"] for m in manifest if not m.get("floor")]
     if no_floor:
         print(f"[anchor] 階が未割当の島をskip: {no_floor}\n"

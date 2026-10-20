@@ -71,7 +71,7 @@ def compute(paths, out_name="flowstate_yaw.npz"):
     return deg
 
 
-def load(paths, out_name="flowstate_yaw.npz"):
+def load(paths, out_name: str = "flowstate_yaw.npz"):
     """保存済みのフレーム毎ヨー [deg]。無ければ None"""
     p = paths.imu / out_name
     return np.load(p)["yaw_deg"] if p.exists() else None

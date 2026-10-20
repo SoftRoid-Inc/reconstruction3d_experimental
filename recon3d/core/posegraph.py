@@ -28,15 +28,26 @@
   python main.py tool posegraph --input /data/x --chunks 0 1 2 3 --tag pg_test
 出力: frontend_bench/<tag>/ (chaining と同契約)
 """
+from __future__ import annotations
+
 import argparse
 import json
+from pathlib import Path
+from typing import Any, Sequence, TypeAlias
 
 import numpy as np
 from scipy.optimize import least_squares
-from scipy.spatial import cKDTree
+from scipy.spatial import cKDTree  # type: ignore[attr-defined]
 
 from recon3d.core.chaining import load_chunk, trimmed_icp_sim3
 from recon3d.core.geometry import rot_y, rotation_to_y, sim3_umeyama
+from recon3d.paths import Paths
+from recon3d.types import F64, Mat3, Points3, Poses, Sim3
+
+#: チャンク1本の前処理結果 (names / phi / rg / pos_g / ok / pf_g)
+Meta: TypeAlias = "dict[str, Any]"
+#: ポーズグラフのエッジ (j / k / kind / w / s / dpsi / t / resid)
+Edge: TypeAlias = "dict[str, Any]"
 from recon3d.core.io_ply import read_ply_xyzrgb, write_ply
 
 PLY_STRIDE = 8
@@ -49,11 +60,11 @@ LOOP_MAX_RESID = 0.12 # ICP残差がこれ以下なら採用 (隣接の実測3�
 LOOP_W = 0.7          # ループエッジの重み (逐次エッジより控えめ)
 
 
-def wrap(a):
+def wrap(a: F64) -> F64:
     return np.arctan2(np.sin(a), np.cos(a))
 
 
-def chunk_gravity_yaw(poses):
+def chunk_gravity_yaw(poses: Poses) -> tuple[F64, Mat3]:
     """チャンクを重力整列し、各フレームのヨー [rad] と重力回転Rgを返す"""
     ups = poses[:, :3, 1]
     up = np.median(ups / np.linalg.norm(ups, axis=1, keepdims=True), axis=0)
@@ -62,7 +73,7 @@ def chunk_gravity_yaw(poses):
     return np.arctan2(-fwd[:, 2], fwd[:, 0]), rg
 
 
-def prepare(chunks):
+def prepare(chunks: Sequence[tuple]) -> list[Meta]:
     meta = []
     for names, pos, poses, pf, unt in chunks:
         phi, rg = chunk_gravity_yaw(poses)
@@ -73,12 +84,13 @@ def prepare(chunks):
     return meta
 
 
-def _yaw_of(R):
+def _yaw_of(R: Mat3) -> float:
     """回転行列の重力軸(y)まわり成分"""
     return float(np.arctan2(R[0, 2], R[0, 0]))
 
 
-def icp_edge(meta, j, k, kind="seq", w=1.0, T0=None):
+def icp_edge(meta: Sequence[Meta], j: int, k: int, kind: str = "seq",
+             w: float = 1.0, T0: Sim3 | None = None) -> Edge | None:
     """チャンク j,k の相対Sim(3)を点群ICPで測りエッジ化する (重力整列系)
 
     返す測定値 (s_jk, yaw_jk, t_jk) は「chunk k の点を chunk j 系へ写す」変換。
@@ -112,7 +124,7 @@ def icp_edge(meta, j, k, kind="seq", w=1.0, T0=None):
             "resid": round(float(resid), 4)}
 
 
-def seq_edges(meta):
+def seq_edges(meta: Sequence[Meta]) -> list[Edge]:
     """隣接チャンクのICP相対変換をエッジにする"""
     edges = []
     for j in range(len(meta) - 1):
@@ -122,7 +134,8 @@ def seq_edges(meta):
     return edges
 
 
-def initial_solution(meta, edges):
+def initial_solution(meta: Sequence[Meta],
+                     edges: Sequence[Edge]) -> tuple[F64, F64, F64]:
     """逐次エッジを順に合成した初期値 (= 従来のチェーン相当)"""
     n = len(meta)
     s, psi, t = np.ones(n), np.zeros(n), np.zeros((n, 3))
@@ -135,17 +148,20 @@ def initial_solution(meta, edges):
         j = e["j"]
         s[k] = s[j] * e["s"]
         psi[k] = psi[j] + e["dpsi"]
-        t[k] = s[j] * (rot_y(psi[j]) @ e["t"]) + t[j]
+        t[k] = s[j] * (rot_y(float(psi[j])) @ e["t"]) + t[j]
     return s, psi, t
 
 
-def place(meta, s, psi, t, k, pts=None):
+def place(meta: Sequence[Meta], s: F64, psi: F64, t: F64, k: int,
+          pts: Points3 | None = None) -> Points3:
     p = meta[k]["pos_g"] if pts is None else pts
     return s[k] * (p @ rot_y(psi[k]).T) + t[k]
 
 
-def find_loops(meta, s, psi, t, radius=LOOP_RADIUS,
-               min_gap=LOOP_MIN_GAP, max_resid=LOOP_MAX_RESID):
+def find_loops(meta: Sequence[Meta], s: F64, psi: F64, t: F64,
+               radius: float = LOOP_RADIUS,
+               min_gap: int = LOOP_MIN_GAP,
+               max_resid: float = LOOP_MAX_RESID) -> list[Edge]:
     """現在解で空間的に近い非隣接チャンク対をICP検証してループエッジにする"""
     cen = np.stack([place(meta, s, psi, t, k).mean(axis=0)
                     for k in range(len(meta))])
@@ -160,8 +176,8 @@ def find_loops(meta, s, psi, t, radius=LOOP_RADIUS,
             continue
         tried += 1
         # 現在解を初期値に (chunk k 系 → chunk j 系)
-        T0 = (s[k] / s[j], rot_y(psi[k] - psi[j]),
-              (rot_y(-psi[j]) @ (t[k] - t[j])) / s[j])
+        T0 = (float(s[k] / s[j]), rot_y(float(psi[k] - psi[j])),
+              (rot_y(float(-psi[j])) @ (t[k] - t[j])) / s[j])
         e = icp_edge(meta, j, k, kind="loop", w=LOOP_W, T0=T0)
         if e is None or e["resid"] > max_resid:
             continue
@@ -172,7 +188,8 @@ def find_loops(meta, s, psi, t, radius=LOOP_RADIUS,
     return loops
 
 
-def solve(meta, edges, yaw_w=YAW_W):
+def solve(meta: Sequence[Meta], edges: Sequence[Edge],
+          yaw_w: float = YAW_W) -> tuple[tuple[F64, F64, F64], float]:
     n = len(meta)
 
     def unpack(x):
@@ -188,7 +205,7 @@ def solve(meta, edges, yaw_w=YAW_W):
             out.append([w * SCALE_W * (np.log(s[k]) - np.log(s[j])
                                        - np.log(e["s"]))])
             out.append([w * yaw_w * wrap(psi[k] - psi[j] - e["dpsi"])])
-            pred = s[j] * (rot_y(psi[j]) @ e["t"]) + t[j]
+            pred = s[j] * (rot_y(float(psi[j])) @ e["t"]) + t[j]
             out.append(w * (t[k] - pred))
         return np.concatenate(out)
 
@@ -227,7 +244,8 @@ def solve(meta, edges, yaw_w=YAW_W):
     return unpack(sol.x), r1
 
 
-def run(paths, cdirs, tag, yaw_w=YAW_W, loops=True):
+def run(paths: Paths, cdirs: Sequence[Path], tag: str,
+        yaw_w: float = YAW_W, loops: bool = True) -> Path:
     chunks = [load_chunk(c) for c in cdirs]
     meta = prepare(chunks)
     edges = seq_edges(meta)
@@ -278,7 +296,7 @@ def run(paths, cdirs, tag, yaw_w=YAW_W, loops=True):
     return out
 
 
-def main(paths, argv=None):
+def main(paths: Paths, argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag")
     ap.add_argument("--chunks", nargs="*", type=int)
