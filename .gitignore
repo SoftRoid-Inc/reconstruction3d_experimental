@@ -3,6 +3,8 @@ cubicasa/results/
 __pycache__/
 *.pyc
 recon3d/output/
+# 成果物 (レポート・評価出力)。公開リポジトリには入れない
+recon3d/results/
 .pytest_cache/
 img_align_backup_latest.tgz
 # 外部テストデータセット (polish-pipeline sfm_testdataset)。実体は
