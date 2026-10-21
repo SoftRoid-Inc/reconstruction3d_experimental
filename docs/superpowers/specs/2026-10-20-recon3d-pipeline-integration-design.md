@@ -226,7 +226,20 @@ M1 が今すぐ成立するのは、recon3d が図面なしでも軌跡生成ま
 スケールが無いまま図面アンカーを走らせると `slab`(誤差97〜383%)に落ち、
 `match_corners` の ±40% 探索窓に正解が入らない。
 
-### 10. M1 の採点は `score_recon.py` に足す(設計者の判断)
+### 10. M1 の採点は**既存の経路がそのまま使える**(2026-10-20 追記・訂正)
+
+計画作成時の調査で、`engine_recon3d.py` すら不要と分かった。
+`get_trajectory_json_key` の docstring が「**エンジン非依存**。dfsfm /
+opensfm / vslam のどれが作っても同じキーへ書き、`recon_result` はここだけを
+読む」と明言しており、`eval/src/engine_dfsfm.load()` が読むのは
+`recon_result` が出す `results/traj_result_*.json` である。
+つまり seam さえ正しく書けば、**既存の `score_recon.py --engine dfsfm` で
+採点できる**(loader 名が engine 名に見えるだけで、中身はエンジン非依存)。
+
+以下は訂正前の記述。M2 で位置を比べる段になったら、採点経路の二重
+(recon_ff の独自ハーネス)の解消は依然として課題として残る。
+
+### 10b. (旧) M1 の採点は `score_recon.py` に足す
 
 `eval/src/engine_recon3d.py`(`load` / `tracks_of`)を書き、`_load()` に分岐を
 足し、`--engine` に名前を増やす。M1 の指標は形だけで、形は README が
