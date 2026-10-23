@@ -122,12 +122,22 @@ def imu_segments(paths: Paths, n_frames: int, use_idle: bool = True
     if not tr_path.exists():
         from recon3d.imu.transitions import detect
         detect(paths)
-    ev = json.loads(tr_path.read_text())["events"]
-    fdt = max(e["t_end"] for e in ev) / max(n_frames, 1) if ev else 0.5
+    doc = json.loads(tr_path.read_text())
+    ev = doc["events"]
+    # 録画長は **meta.frame_dt から** 出す。以前は max(t_end)/n_frames で逆算していたが、
+    # これは `n_frames * fdt == max(t_end)` と恒等になるので、下の端判定が
+    # 「t_start > max(t_end) - 12s」に潰れていた。すなわち**最終イベントは長さが
+    # 12秒未満なら必ず捨てられる**。検出イベントの64%が12秒未満で、実データ487件の
+    # 18%がこれで消えていた。区間が少ないほど影響が大きく、人手入力では1区間しか
+    # 無い撮影の切断点が丸ごと消える。
+    # meta が無い旧ファイルだけ従来の逆算に落とす (挙動を変えない)。
+    fdt = (doc.get("meta") or {}).get("frame_dt")
+    if not fdt:
+        fdt = max(e["t_end"] for e in ev) / max(n_frames, 1) if ev else 0.5
+    rec_sec = n_frames * fdt
     cuts = []
     for e in ev:
-        if e["t_end"] < IMU_EDGE_SEC or \
-                e["t_start"] > n_frames * fdt - IMU_EDGE_SEC:
+        if e["t_end"] < IMU_EDGE_SEC or e["t_start"] > rec_sec - IMU_EDGE_SEC:
             continue    # 録画端アーチファクト
         a = max(0, int(e["frame_start"]) - IMU_STAIR_PAD)
         b = min(n_frames - 1, int(e["frame_end"]) + IMU_STAIR_PAD)
