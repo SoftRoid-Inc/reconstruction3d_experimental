@@ -37,8 +37,11 @@ def _imu_traj():
 def detect(paths, out_name="transitions.json", **kw):
     """imu_raw.npz → transitions.json。kwはdetect_floor_transitionsへ透過
 
-    offset_sec は imu_traj 既定の-5.0でなく 0.0 を使う (教師ラベル遅れ補正は
-    本データでは過補正で、GT比10〜15フレーム早くずれることを0828/0616/0912で実測)。
+    offset_sec=0.0 (教師ラベル遅れ補正は本データでは過補正で、GT比10〜15フレーム
+    早くずれることを0828/0616/0912で実測)。**imu_traj 側の既定も 0.0 になった**ので
+    この setdefault は通常 no-op。旧版の imu_traj を指した場合の保険として残す
+    (145撮影・GT境界230本の再採点で境界再現率 79.6%→93.9%。
+     ~/.claude/jobs/imu-transitions/)。
     既知の限界: 短い階段(2F→3F、数秒)を見逃すことがある (0616/0925で実測)。
     見逃しは core/stair_check の幾何検算が引き受ける。
     """
